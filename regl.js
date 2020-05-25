@@ -18,6 +18,7 @@ var wrapRead = require('./lib/read')
 var createCore = require('./lib/core')
 var createStats = require('./lib/stats')
 var createTimer = require('./lib/timer')
+var gl2 = require('./lib/gl2/gl2.js')
 
 var GL_COLOR_BUFFER_BIT = 16384
 var GL_DEPTH_BUFFER_BIT = 256
@@ -59,6 +60,11 @@ module.exports = function wrapREGL (args) {
   var stringStore = createStringStore()
   var stats = createStats()
   var extensions = extensionState.extensions
+
+  if (gl.getParameter(gl.VERSION).indexOf('WebGL 2.0') >= 0) {
+    gl2.gl2(gl, extensions)
+  }
+
   var timer = createTimer(gl, extensions)
 
   var START_TIME = clock()
