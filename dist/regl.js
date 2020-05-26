@@ -2212,6 +2212,90 @@ var isPow2$1 = function (v) {
   return !(v & (v - 1)) && (!!v)
 }
 
+var GL_DEPTH_COMPONENT$1 = 0x1902
+var GL_DEPTH_STENCIL$1 = 0x84F9
+var HALF_FLOAT_OES = 0x8D61
+
+var gl2Extensions = {
+  'WEBGL_depth_texture': {
+    'UNSIGNED_INT_24_8_WEBGL': 0x84FA
+  },
+  'OES_element_index_uint': {},
+  'OES_texture_float': {},
+  'OES_texture_float_linear': {},
+  'OES_texture_half_float': {
+    'HALF_FLOAT_OES': 0x8D61
+  },
+  'OES_texture_half_float_linear': {},
+  'OES_standard_derivatives': {},
+  'EXT_frag_depth': {},
+  'EXT_blend_minmax': {
+    'MIN_EXT': 0x8007,
+    'MAX_EXT': 0x8008
+  },
+  'EXT_shader_texture_lod': {}
+}
+
+var gl2 = {
+  gl2: function (gl, extensions) {
+    gl[this.versionProperty] = 2
+    for (var p in gl2Extensions) {
+      extensions[p.toLowerCase()] = gl2Extensions[p]
+    }
+
+    // mocks of draw buffers's functions
+    extensions['WEBGL_draw_buffers'] = {
+
+    }
+
+    // mocks of vao functions
+    extensions['OES_vertex_array_object'] = {
+
+    }
+  },
+
+  versionProperty: '___regl_gl_version___',
+
+  getInternalFormat: function (gl, format, type) {
+    if (gl[this.versionProperty] !== 2) {
+      return format
+    }
+    // webgl2
+    // reference:
+    // https://webgl2fundamentals.org/webgl/lessons/webgl-data-textures.html
+    if (format === GL_DEPTH_COMPONENT$1) {
+      // gl.DEPTH_COMPONENT24
+      return 0x81A6
+    } else if (format === GL_DEPTH_STENCIL$1) {
+      // gl.DEPTH24_STENCIL8
+      return 0x88F0
+    } else if (type === HALF_FLOAT_OES && format === gl.RGBA) {
+      // gl.RGBA16F
+      return 0x881A
+    } else if (type === HALF_FLOAT_OES && format === gl.RGB) {
+      // gl.RGB16F
+      return 0x881B
+    } else if (type === gl.FLOAT && format === gl.RGBA) {
+      // gl.RGBA32F
+      return 0x8814
+    } else if (type === gl.FLOAT && format === gl.RGB) {
+      // gl.RGB32F
+      return 0x8815
+    }
+    return format
+  },
+
+  getTextureType: function (gl, type) {
+    if (gl[this.versionProperty] !== 2) {
+      return type
+    }
+    if (type === HALF_FLOAT_OES) {
+      return gl.HALF_FLOAT
+    }
+    return type
+  }
+};
+
 var GL_COMPRESSED_TEXTURE_FORMATS = 0x86A3
 
 var GL_TEXTURE_2D$1 = 0x0DE1
@@ -3031,10 +3115,13 @@ function createTextureSet (
     var width = info.width
     var height = info.height
 
+    internalformat = gl2.getInternalFormat(gl, format, type)
+    type = gl2.getTextureType(gl, type)
+
     setFlags(info)
 
     if (element) {
-      gl.texImage2D(target, miplevel, format, format, type, element)
+      gl.texImage2D(target, miplevel, internalformat, format, type, element)
     } else if (info.compressed) {
       gl.compressedTexImage2D(target, miplevel, internalformat, width, height, 0, data)
     } else if (info.needsCopy) {
@@ -3042,7 +3129,7 @@ function createTextureSet (
       gl.copyTexImage2D(
         target, miplevel, format, info.xOffset, info.yOffset, width, height, 0)
     } else {
-      gl.texImage2D(target, miplevel, format, width, height, 0, format, type, data || null)
+      gl.texImage2D(target, miplevel, internalformat, width, height, 0, format, type, data || null)
     }
   }
 
@@ -3530,6 +3617,9 @@ function createTextureSet (
 
       tempBind(texture)
 
+      var internalformat = gl2.getInternalFormat(gl, texture.format, texture.type)
+      var type = gl2.getTextureType(gl, texture.type)
+
       for (var i = 0; texture.mipmask >> i; ++i) {
         var _w = w >> i
         var _h = h >> i
@@ -3537,12 +3627,12 @@ function createTextureSet (
         gl.texImage2D(
           GL_TEXTURE_2D$1,
           i,
-          texture.format,
+          internalformat,
           _w,
           _h,
           0,
           texture.format,
-          texture.type,
+          type,
           null)
       }
       tempRestore()
@@ -3813,6 +3903,10 @@ function createTextureSet (
     values(textureSet).forEach(function (texture) {
       texture.texture = gl.createTexture()
       gl.bindTexture(texture.target, texture.texture)
+
+      var internalformat = gl2.getInternalFormat(gl, texture.format, texture.type)
+      var type = gl2.getTextureType(gl, texture.type)
+
       for (var i = 0; i < 32; ++i) {
         if ((texture.mipmask & (1 << i)) === 0) {
           continue
@@ -3820,23 +3914,23 @@ function createTextureSet (
         if (texture.target === GL_TEXTURE_2D$1) {
           gl.texImage2D(GL_TEXTURE_2D$1,
             i,
-            texture.internalformat,
+            internalformat,
             texture.width >> i,
             texture.height >> i,
             0,
-            texture.internalformat,
-            texture.type,
+            texture.format,
+            type,
             null)
         } else {
           for (var j = 0; j < 6; ++j) {
             gl.texImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X$1 + j,
               i,
-              texture.internalformat,
+              internalformat,
               texture.width >> i,
               texture.height >> i,
               0,
-              texture.internalformat,
-              texture.type,
+              texture.format,
+              type,
               null)
           }
         }
@@ -3863,7 +3957,7 @@ var GL_RGB5_A1$1 = 0x8057
 var GL_RGB565$1 = 0x8D62
 var GL_DEPTH_COMPONENT16 = 0x81A5
 var GL_STENCIL_INDEX8 = 0x8D48
-var GL_DEPTH_STENCIL$1 = 0x84F9
+var GL_DEPTH_STENCIL$2 = 0x84F9
 
 var GL_SRGB8_ALPHA8_EXT = 0x8C43
 
@@ -3880,7 +3974,7 @@ FORMAT_SIZES[GL_RGB565$1] = 2
 
 FORMAT_SIZES[GL_DEPTH_COMPONENT16] = 2
 FORMAT_SIZES[GL_STENCIL_INDEX8] = 1
-FORMAT_SIZES[GL_DEPTH_STENCIL$1] = 4
+FORMAT_SIZES[GL_DEPTH_STENCIL$2] = 4
 
 FORMAT_SIZES[GL_SRGB8_ALPHA8_EXT] = 4
 FORMAT_SIZES[GL_RGBA32F_EXT] = 16
@@ -3898,7 +3992,7 @@ var wrapRenderbuffers = function (gl, extensions, limits, stats, config) {
     'rgb5 a1': GL_RGB5_A1$1,
     'depth': GL_DEPTH_COMPONENT16,
     'stencil': GL_STENCIL_INDEX8,
-    'depth stencil': GL_DEPTH_STENCIL$1
+    'depth stencil': GL_DEPTH_STENCIL$2
   }
 
   if (extensions.ext_srgb) {
@@ -4134,7 +4228,7 @@ var GL_FLOAT$5 = 0x1406
 var GL_RGB$1 = 0x1907
 var GL_RGBA$2 = 0x1908
 
-var GL_DEPTH_COMPONENT$1 = 0x1902
+var GL_DEPTH_COMPONENT$2 = 0x1902
 
 var colorTextureFormatEnums = [
   GL_RGB$1,
@@ -4159,7 +4253,7 @@ var GL_RGB5_A1$2 = 0x8057
 var GL_RGB565$2 = 0x8D62
 var GL_DEPTH_COMPONENT16$1 = 0x81A5
 var GL_STENCIL_INDEX8$1 = 0x8D48
-var GL_DEPTH_STENCIL$2 = 0x84F9
+var GL_DEPTH_STENCIL$3 = 0x84F9
 
 var GL_SRGB8_ALPHA8_EXT$1 = 0x8C43
 
@@ -4709,7 +4803,7 @@ function wrapFBOState (
       incRefAndCheckShape(depthAttachment, width, height)
       check$1(!depthAttachment ||
         (depthAttachment.texture &&
-          depthAttachment.texture._texture.format === GL_DEPTH_COMPONENT$1) ||
+          depthAttachment.texture._texture.format === GL_DEPTH_COMPONENT$2) ||
         (depthAttachment.renderbuffer &&
           depthAttachment.renderbuffer._renderbuffer.format === GL_DEPTH_COMPONENT16$1),
       'invalid depth attachment for framebuffer object')
@@ -4721,9 +4815,9 @@ function wrapFBOState (
       incRefAndCheckShape(depthStencilAttachment, width, height)
       check$1(!depthStencilAttachment ||
         (depthStencilAttachment.texture &&
-          depthStencilAttachment.texture._texture.format === GL_DEPTH_STENCIL$2) ||
+          depthStencilAttachment.texture._texture.format === GL_DEPTH_STENCIL$3) ||
         (depthStencilAttachment.renderbuffer &&
-          depthStencilAttachment.renderbuffer._renderbuffer.format === GL_DEPTH_STENCIL$2),
+          depthStencilAttachment.renderbuffer._renderbuffer.format === GL_DEPTH_STENCIL$3),
       'invalid depth-stencil attachment for framebuffer object')
 
       // decrement references
@@ -5357,6 +5451,7 @@ function wrapShaderState (gl, stringStore, stats, config) {
     this.program = null
     this.uniforms = []
     this.attributes = []
+    this.refCount = 1
 
     if (config.profile) {
       this.stats = {
@@ -5502,8 +5597,11 @@ function wrapShaderState (gl, stringStore, stats, config) {
         cache = programCache[fragId] = {}
       }
       var prevProgram = cache[vertId]
-      if (prevProgram && !attribLocations) {
-        return prevProgram
+      if (prevProgram) {
+        prevProgram.refCount++
+        if (!attribLocations) {
+          return prevProgram
+        }
       }
       var program = new REGLProgram(fragId, vertId)
       stats.shaderCount++
@@ -5512,7 +5610,29 @@ function wrapShaderState (gl, stringStore, stats, config) {
         cache[vertId] = program
       }
       programList.push(program)
-      return program
+      return extend(program, {
+        destroy: function () {
+          program.refCount--
+          if (program.refCount <= 0) {
+            gl.deleteProgram(program.program)
+            var idx = programList.indexOf(program)
+            programList.splice(idx, 1)
+            stats.shaderCount--
+          }
+          // no program is linked to this vert anymore
+          if (cache[program.vertId].refCount <= 0) {
+            gl.deleteShader(vertShaders[program.vertId])
+            delete vertShaders[program.vertId]
+            delete programCache[program.fragId][program.vertId]
+          }
+          // no program is linked to this frag anymore
+          if (!Object.keys(programCache[program.fragId]).length) {
+            gl.deleteShader(fragShaders[program.fragId])
+            delete fragShaders[program.fragId]
+            delete programCache[program.fragId]
+          }
+        }
+      })
     },
 
     restore: restoreShaders,
@@ -9184,7 +9304,11 @@ function reglCore (
     emitScopeProc(env, args)
     emitBatchProc(env, args)
 
-    return env.compile()
+    return extend(env.compile(), {
+      destroy: function () {
+        args.shader.program.destroy()
+      }
+    })
   }
 
   // ===========================================================================
@@ -9508,6 +9632,11 @@ function wrapREGL (args) {
   var stringStore = createStringStore()
   var stats$$1 = stats()
   var extensions = extensionState.extensions
+
+  if (gl.getParameter(gl.VERSION).indexOf('WebGL 2.0') >= 0) {
+    gl2.gl2(gl, extensions)
+  }
+
   var timer = createTimer(gl, extensions)
 
   var START_TIME = clock()
@@ -9839,7 +9968,10 @@ function wrapREGL (args) {
     }
 
     return extend(REGLCommand, {
-      stats: stats$$1
+      stats: stats$$1,
+      destroy: function () {
+        compiled.destroy()
+      }
     })
   }
 
