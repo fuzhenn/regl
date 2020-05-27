@@ -109,7 +109,8 @@
     "build-compare": "node bin/build-compare.js",
     "build-docs": "remark API.md -o API.md",
     "build-typescript": "cp regl.d.ts dist/",
-    "lint-docs": "remark --frail --quiet README.md API.md DEVELOPING.md CHANGES.md"
+    "lint-docs": "remark --frail --quiet README.md API.md DEVELOPING.md CHANGES.md",
+    "version": "npm run build-script && git add -A dist"
   },
   "repository": {
     "type": "git",
