@@ -61,9 +61,9 @@ module.exports = function wrapREGL (args) {
   var stats = createStats()
   var extensions = extensionState.extensions
 
-  if (gl.getParameter(gl.VERSION).indexOf('WebGL 2.0') >= 0) {
-    gl2.gl2(gl, extensions)
-  }
+  // if (gl.getParameter(gl.VERSION).indexOf('WebGL 2.0') >= 0) {
+  //   gl2.gl2(gl, extensions)
+  // }
 
   var timer = createTimer(gl, extensions)
 
