@@ -1161,11 +1161,9 @@ var gl2Extensions = {
   },
   'OES_element_index_uint': {},
   'OES_texture_float': {},
-  'OES_texture_float_linear': {},
   'OES_texture_half_float': {
     'HALF_FLOAT_OES': 0x8D61
   },
-  'OES_texture_half_float_linear': {},
   'EXT_color_buffer_float': {},
   'OES_standard_derivatives': {},
   'EXT_frag_depth': {},
@@ -1177,6 +1175,8 @@ var gl2Extensions = {
 }
 
 var gl2 = {
+  // webgl1 extensions natively supported by webgl2
+  // this is called when initializing regl context
   gl2: function (gl, extensions) {
     gl[this.versionProperty] = 2
     for (var p in gl2Extensions) {
@@ -1246,6 +1246,7 @@ var gl2 = {
       }
     }
 
+    // mocks of instancing extension
     extensions['angle_instanced_arrays'] = {
       'VERTEX_ATTRIB_ARRAY_DIVISOR_ANGLE': 0x88FE,
       'drawArraysInstancedANGLE': function () {
@@ -1262,11 +1263,12 @@ var gl2 = {
 
   versionProperty: '___regl_gl_version___',
 
+  // texture internal format to update on the fly
   getInternalFormat: function (gl, format, type) {
     if (gl[this.versionProperty] !== 2) {
       return format
     }
-    // webgl2
+    // webgl2 texture formats
     // reference:
     // https://webgl2fundamentals.org/webgl/lessons/webgl-data-textures.html
     if (format === GL_DEPTH_COMPONENT) {
@@ -1291,6 +1293,7 @@ var gl2 = {
     return format
   },
 
+  // texture type to update on the fly
   getTextureType: function (gl, type) {
     if (gl[this.versionProperty] !== 2) {
       return type
@@ -4183,10 +4186,6 @@ var wrapRenderbuffers = function (gl, extensions, limits, stats, config) {
 
       gl.bindRenderbuffer(GL_RENDERBUFFER, renderbuffer.renderbuffer)
       gl.renderbufferStorage(GL_RENDERBUFFER, format, w, h)
-
-      check$1(
-        gl.getError() === 0,
-        'invalid render buffer format')
 
       if (config.profile) {
         renderbuffer.stats.size = getRenderbufferSize(renderbuffer.format, renderbuffer.width, renderbuffer.height)
@@ -9702,9 +9701,9 @@ function wrapREGL (args) {
   var stats$$1 = stats()
   var extensions = extensionState.extensions
 
-  if (gl.getParameter(gl.VERSION).indexOf('WebGL 2.0') >= 0) {
-    gl2.gl2(gl, extensions)
-  }
+  // if (gl.getParameter(gl.VERSION).indexOf('WebGL 2.0') >= 0) {
+  //   gl2.gl2(gl, extensions)
+  // }
 
   var timer = createTimer(gl, extensions)
 
