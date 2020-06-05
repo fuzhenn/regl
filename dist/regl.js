@@ -5283,7 +5283,7 @@ function wrapAttributeState (
         if (binding.buffer) {
           gl.enableVertexAttribArray(i)
           gl.vertexAttribPointer(i, binding.size, binding.type, binding.normalized, binding.stride, binding.offfset)
-          if (exti) {
+          if (exti && binding.divisor) {
             exti.vertexAttribDivisorANGLE(i, binding.divisor)
           }
         } else {
@@ -5323,7 +5323,7 @@ function wrapAttributeState (
         gl.enableVertexAttribArray(i)
         gl.bindBuffer(GL_ARRAY_BUFFER$1, attr.buffer.buffer)
         gl.vertexAttribPointer(i, attr.size, attr.type, attr.normalized, attr.stride, attr.offset)
-        if (exti) {
+        if (exti && attr.divisor) {
           exti.vertexAttribDivisorANGLE(i, attr.divisor)
         }
       } else {
@@ -5379,18 +5379,21 @@ function wrapAttributeState (
       check$1(attributes.length < NUM_ATTRIBUTES, 'too many attributes')
       check$1(attributes.length > 0, 'must specify at least one attribute')
 
-      for (var j = 0; j < vao.buffers.length; ++j) {
-        vao.buffers[j].destroy()
-      }
-      vao.buffers.length = 0
-
+      var bufUpdated = {}
       var nattributes = vao.attributes
       nattributes.length = attributes.length
       for (var i = 0; i < attributes.length; ++i) {
         var spec = attributes[i]
         var rec = nattributes[i] = new AttributeRecord()
-        if (Array.isArray(spec) || isTypedArray(spec) || isNDArrayLike(spec)) {
-          var buf = bufferState.create(spec, GL_ARRAY_BUFFER$1, false, true)
+        var data = spec.data || spec
+        if (Array.isArray(data) || isTypedArray(data) || isNDArrayLike(data)) {
+          var buf
+          if (vao.buffers[i]) {
+            buf = vao.buffers[i]
+            buf.subdata(data)
+          } else {
+            buf = vao.buffers[i] = bufferState.create(spec, GL_ARRAY_BUFFER$1, false, true)
+          }
           rec.buffer = bufferState.getBuffer(buf)
           rec.size = rec.buffer.dimension | 0
           rec.normalized = false
@@ -5399,7 +5402,7 @@ function wrapAttributeState (
           rec.stride = 0
           rec.divisor = 0
           rec.state = 1
-          vao.buffers.push(buf)
+          bufUpdated[i] = 1
         } else if (bufferState.getBuffer(spec)) {
           rec.buffer = bufferState.getBuffer(spec)
           rec.size = rec.buffer.dimension | 0
@@ -5441,11 +5444,25 @@ function wrapAttributeState (
         }
       }
 
+      // retire unused buffers
+      for (var j = 0; j < vao.buffers.length; ++j) {
+        if (!bufUpdated[j] && vao.buffers[j]) {
+          vao.buffers[j].destroy()
+          vao.buffers[j] = null
+        }
+      }
+
       vao.refresh()
       return updateVAO
     }
 
     updateVAO.destroy = function () {
+      for (var j = 0; j < vao.buffers.length; ++j) {
+        if (vao.buffers[j]) {
+          vao.buffers[j].destroy()
+        }
+      }
+      vao.buffers.length = 0
       vao.destroy()
     }
 
