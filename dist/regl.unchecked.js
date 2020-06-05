@@ -4,20 +4,6 @@
     (global.createREGL = factory());
 }(this, (function () { 'use strict';
 
-var isTypedArray = function (x) {
-  return (
-    x instanceof Uint8Array ||
-    x instanceof Uint16Array ||
-    x instanceof Uint32Array ||
-    x instanceof Int8Array ||
-    x instanceof Int16Array ||
-    x instanceof Int32Array ||
-    x instanceof Float32Array ||
-    x instanceof Float64Array ||
-    x instanceof Uint8ClampedArray
-  )
-}
-
 var extend = function (base, opts) {
   var keys = Object.keys(opts)
   for (var i = 0; i < keys.length; ++i) {
@@ -25,658 +11,6 @@ var extend = function (base, opts) {
   }
   return base
 }
-
-// Error checking and parameter validation.
-//
-// Statements for the form `check.someProcedure(...)` get removed by
-// a browserify transform for optimized/minified bundles.
-//
-/* globals atob */
-var endl = '\n'
-
-// only used for extracting shader names.  if atob not present, then errors
-// will be slightly crappier
-function decodeB64 (str) {
-  if (typeof atob !== 'undefined') {
-    return atob(str)
-  }
-  return 'base64:' + str
-}
-
-function raise (message) {
-  var error = new Error('(regl) ' + message)
-  console.error(error)
-  throw error
-}
-
-function check (pred, message) {
-  if (!pred) {
-    raise(message)
-  }
-}
-
-function encolon (message) {
-  if (message) {
-    return ': ' + message
-  }
-  return ''
-}
-
-function checkParameter (param, possibilities, message) {
-  if (!(param in possibilities)) {
-    raise('unknown parameter (' + param + ')' + encolon(message) +
-          '. possible values: ' + Object.keys(possibilities).join())
-  }
-}
-
-function checkIsTypedArray (data, message) {
-  if (!isTypedArray(data)) {
-    raise(
-      'invalid parameter type' + encolon(message) +
-      '. must be a typed array')
-  }
-}
-
-function standardTypeEh (value, type) {
-  switch (type) {
-    case 'number': return typeof value === 'number'
-    case 'object': return typeof value === 'object'
-    case 'string': return typeof value === 'string'
-    case 'boolean': return typeof value === 'boolean'
-    case 'function': return typeof value === 'function'
-    case 'undefined': return typeof value === 'undefined'
-    case 'symbol': return typeof value === 'symbol'
-  }
-}
-
-function checkTypeOf (value, type, message) {
-  if (!standardTypeEh(value, type)) {
-    raise(
-      'invalid parameter type' + encolon(message) +
-      '. expected ' + type + ', got ' + (typeof value))
-  }
-}
-
-function checkNonNegativeInt (value, message) {
-  if (!((value >= 0) &&
-        ((value | 0) === value))) {
-    raise('invalid parameter type, (' + value + ')' + encolon(message) +
-          '. must be a nonnegative integer')
-  }
-}
-
-function checkOneOf (value, list, message) {
-  if (list.indexOf(value) < 0) {
-    raise('invalid value' + encolon(message) + '. must be one of: ' + list)
-  }
-}
-
-var constructorKeys = [
-  'gl',
-  'canvas',
-  'container',
-  'attributes',
-  'pixelRatio',
-  'extensions',
-  'optionalExtensions',
-  'profile',
-  'onDone'
-]
-
-function checkConstructor (obj) {
-  Object.keys(obj).forEach(function (key) {
-    if (constructorKeys.indexOf(key) < 0) {
-      raise('invalid regl constructor argument "' + key + '". must be one of ' + constructorKeys)
-    }
-  })
-}
-
-function leftPad (str, n) {
-  str = str + ''
-  while (str.length < n) {
-    str = ' ' + str
-  }
-  return str
-}
-
-function ShaderFile () {
-  this.name = 'unknown'
-  this.lines = []
-  this.index = {}
-  this.hasErrors = false
-}
-
-function ShaderLine (number, line) {
-  this.number = number
-  this.line = line
-  this.errors = []
-}
-
-function ShaderError (fileNumber, lineNumber, message) {
-  this.file = fileNumber
-  this.line = lineNumber
-  this.message = message
-}
-
-function guessCommand () {
-  var error = new Error()
-  var stack = (error.stack || error).toString()
-  var pat = /compileProcedure.*\n\s*at.*\((.*)\)/.exec(stack)
-  if (pat) {
-    return pat[1]
-  }
-  var pat2 = /compileProcedure.*\n\s*at\s+(.*)(\n|$)/.exec(stack)
-  if (pat2) {
-    return pat2[1]
-  }
-  return 'unknown'
-}
-
-function guessCallSite () {
-  var error = new Error()
-  var stack = (error.stack || error).toString()
-  var pat = /at REGLCommand.*\n\s+at.*\((.*)\)/.exec(stack)
-  if (pat) {
-    return pat[1]
-  }
-  var pat2 = /at REGLCommand.*\n\s+at\s+(.*)\n/.exec(stack)
-  if (pat2) {
-    return pat2[1]
-  }
-  return 'unknown'
-}
-
-function parseSource (source, command) {
-  var lines = source.split('\n')
-  var lineNumber = 1
-  var fileNumber = 0
-  var files = {
-    unknown: new ShaderFile(),
-    0: new ShaderFile()
-  }
-  files.unknown.name = files[0].name = command || guessCommand()
-  files.unknown.lines.push(new ShaderLine(0, ''))
-  for (var i = 0; i < lines.length; ++i) {
-    var line = lines[i]
-    var parts = /^\s*#\s*(\w+)\s+(.+)\s*$/.exec(line)
-    if (parts) {
-      switch (parts[1]) {
-        case 'line':
-          var lineNumberInfo = /(\d+)(\s+\d+)?/.exec(parts[2])
-          if (lineNumberInfo) {
-            lineNumber = lineNumberInfo[1] | 0
-            if (lineNumberInfo[2]) {
-              fileNumber = lineNumberInfo[2] | 0
-              if (!(fileNumber in files)) {
-                files[fileNumber] = new ShaderFile()
-              }
-            }
-          }
-          break
-        case 'define':
-          var nameInfo = /SHADER_NAME(_B64)?\s+(.*)$/.exec(parts[2])
-          if (nameInfo) {
-            files[fileNumber].name = (nameInfo[1]
-              ? decodeB64(nameInfo[2])
-              : nameInfo[2])
-          }
-          break
-      }
-    }
-    files[fileNumber].lines.push(new ShaderLine(lineNumber++, line))
-  }
-  Object.keys(files).forEach(function (fileNumber) {
-    var file = files[fileNumber]
-    file.lines.forEach(function (line) {
-      file.index[line.number] = line
-    })
-  })
-  return files
-}
-
-function parseErrorLog (errLog) {
-  var result = []
-  errLog.split('\n').forEach(function (errMsg) {
-    if (errMsg.length < 5) {
-      return
-    }
-    var parts = /^ERROR:\s+(\d+):(\d+):\s*(.*)$/.exec(errMsg)
-    if (parts) {
-      result.push(new ShaderError(
-        parts[1] | 0,
-        parts[2] | 0,
-        parts[3].trim()))
-    } else if (errMsg.length > 0) {
-      result.push(new ShaderError('unknown', 0, errMsg))
-    }
-  })
-  return result
-}
-
-function annotateFiles (files, errors) {
-  errors.forEach(function (error) {
-    var file = files[error.file]
-    if (file) {
-      var line = file.index[error.line]
-      if (line) {
-        line.errors.push(error)
-        file.hasErrors = true
-        return
-      }
-    }
-    files.unknown.hasErrors = true
-    files.unknown.lines[0].errors.push(error)
-  })
-}
-
-function checkShaderError (gl, shader, source, type, command) {
-  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-    var errLog = gl.getShaderInfoLog(shader)
-    var typeName = type === gl.FRAGMENT_SHADER ? 'fragment' : 'vertex'
-    checkCommandType(source, 'string', typeName + ' shader source must be a string', command)
-    var files = parseSource(source, command)
-    var errors = parseErrorLog(errLog)
-    annotateFiles(files, errors)
-
-    Object.keys(files).forEach(function (fileNumber) {
-      var file = files[fileNumber]
-      if (!file.hasErrors) {
-        return
-      }
-
-      var strings = ['']
-      var styles = ['']
-
-      function push (str, style) {
-        strings.push(str)
-        styles.push(style || '')
-      }
-
-      push('file number ' + fileNumber + ': ' + file.name + '\n', 'color:red;text-decoration:underline;font-weight:bold')
-
-      file.lines.forEach(function (line) {
-        if (line.errors.length > 0) {
-          push(leftPad(line.number, 4) + '|  ', 'background-color:yellow; font-weight:bold')
-          push(line.line + endl, 'color:red; background-color:yellow; font-weight:bold')
-
-          // try to guess token
-          var offset = 0
-          line.errors.forEach(function (error) {
-            var message = error.message
-            var token = /^\s*'(.*)'\s*:\s*(.*)$/.exec(message)
-            if (token) {
-              var tokenPat = token[1]
-              message = token[2]
-              switch (tokenPat) {
-                case 'assign':
-                  tokenPat = '='
-                  break
-              }
-              offset = Math.max(line.line.indexOf(tokenPat, offset), 0)
-            } else {
-              offset = 0
-            }
-
-            push(leftPad('| ', 6))
-            push(leftPad('^^^', offset + 3) + endl, 'font-weight:bold')
-            push(leftPad('| ', 6))
-            push(message + endl, 'font-weight:bold')
-          })
-          push(leftPad('| ', 6) + endl)
-        } else {
-          push(leftPad(line.number, 4) + '|  ')
-          push(line.line + endl, 'color:red')
-        }
-      })
-      if (typeof document !== 'undefined' && !window.chrome) {
-        styles[0] = strings.join('%c')
-        console.log.apply(console, styles)
-      } else {
-        console.log(strings.join(''))
-      }
-    })
-
-    check.raise('Error compiling ' + typeName + ' shader, ' + files[0].name)
-  }
-}
-
-function checkLinkError (gl, program, fragShader, vertShader, command) {
-  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-    var errLog = gl.getProgramInfoLog(program)
-    var fragParse = parseSource(fragShader, command)
-    var vertParse = parseSource(vertShader, command)
-
-    var header = 'Error linking program with vertex shader, "' +
-      vertParse[0].name + '", and fragment shader "' + fragParse[0].name + '"'
-
-    if (typeof document !== 'undefined') {
-      console.log('%c' + header + endl + '%c' + errLog,
-        'color:red;text-decoration:underline;font-weight:bold',
-        'color:red')
-    } else {
-      console.log(header + endl + errLog)
-    }
-    check.raise(header)
-  }
-}
-
-function saveCommandRef (object) {
-  object._commandRef = guessCommand()
-}
-
-function saveDrawCommandInfo (opts, uniforms, attributes, stringStore) {
-  saveCommandRef(opts)
-
-  function id (str) {
-    if (str) {
-      return stringStore.id(str)
-    }
-    return 0
-  }
-  opts._fragId = id(opts.static.frag)
-  opts._vertId = id(opts.static.vert)
-
-  function addProps (dict, set) {
-    Object.keys(set).forEach(function (u) {
-      dict[stringStore.id(u)] = true
-    })
-  }
-
-  var uniformSet = opts._uniformSet = {}
-  addProps(uniformSet, uniforms.static)
-  addProps(uniformSet, uniforms.dynamic)
-
-  var attributeSet = opts._attributeSet = {}
-  addProps(attributeSet, attributes.static)
-  addProps(attributeSet, attributes.dynamic)
-
-  opts._hasCount = (
-    'count' in opts.static ||
-    'count' in opts.dynamic ||
-    'elements' in opts.static ||
-    'elements' in opts.dynamic)
-}
-
-function commandRaise (message, command) {
-  var callSite = guessCallSite()
-  raise(message +
-    ' in command ' + (command || guessCommand()) +
-    (callSite === 'unknown' ? '' : ' called from ' + callSite))
-}
-
-function checkCommand (pred, message, command) {
-  if (!pred) {
-    commandRaise(message, command || guessCommand())
-  }
-}
-
-function checkParameterCommand (param, possibilities, message, command) {
-  if (!(param in possibilities)) {
-    commandRaise(
-      'unknown parameter (' + param + ')' + encolon(message) +
-      '. possible values: ' + Object.keys(possibilities).join(),
-      command || guessCommand())
-  }
-}
-
-function checkCommandType (value, type, message, command) {
-  if (!standardTypeEh(value, type)) {
-    commandRaise(
-      'invalid parameter type' + encolon(message) +
-      '. expected ' + type + ', got ' + (typeof value),
-      command || guessCommand())
-  }
-}
-
-function checkOptional (block) {
-  block()
-}
-
-function checkFramebufferFormat (attachment, texFormats, rbFormats) {
-  if (attachment.texture) {
-    checkOneOf(
-      attachment.texture._texture.internalformat,
-      texFormats,
-      'unsupported texture format for attachment')
-  } else {
-    checkOneOf(
-      attachment.renderbuffer._renderbuffer.format,
-      rbFormats,
-      'unsupported renderbuffer format for attachment')
-  }
-}
-
-var GL_CLAMP_TO_EDGE = 0x812F
-
-var GL_NEAREST = 0x2600
-var GL_NEAREST_MIPMAP_NEAREST = 0x2700
-var GL_LINEAR_MIPMAP_NEAREST = 0x2701
-var GL_NEAREST_MIPMAP_LINEAR = 0x2702
-var GL_LINEAR_MIPMAP_LINEAR = 0x2703
-
-var GL_BYTE = 5120
-var GL_UNSIGNED_BYTE = 5121
-var GL_SHORT = 5122
-var GL_UNSIGNED_SHORT = 5123
-var GL_INT = 5124
-var GL_UNSIGNED_INT = 5125
-var GL_FLOAT = 5126
-
-var GL_UNSIGNED_SHORT_4_4_4_4 = 0x8033
-var GL_UNSIGNED_SHORT_5_5_5_1 = 0x8034
-var GL_UNSIGNED_SHORT_5_6_5 = 0x8363
-var GL_UNSIGNED_INT_24_8_WEBGL = 0x84FA
-
-var GL_HALF_FLOAT_OES = 0x8D61
-
-var TYPE_SIZE = {}
-
-TYPE_SIZE[GL_BYTE] =
-TYPE_SIZE[GL_UNSIGNED_BYTE] = 1
-
-TYPE_SIZE[GL_SHORT] =
-TYPE_SIZE[GL_UNSIGNED_SHORT] =
-TYPE_SIZE[GL_HALF_FLOAT_OES] =
-TYPE_SIZE[GL_UNSIGNED_SHORT_5_6_5] =
-TYPE_SIZE[GL_UNSIGNED_SHORT_4_4_4_4] =
-TYPE_SIZE[GL_UNSIGNED_SHORT_5_5_5_1] = 2
-
-TYPE_SIZE[GL_INT] =
-TYPE_SIZE[GL_UNSIGNED_INT] =
-TYPE_SIZE[GL_FLOAT] =
-TYPE_SIZE[GL_UNSIGNED_INT_24_8_WEBGL] = 4
-
-function pixelSize (type, channels) {
-  if (type === GL_UNSIGNED_SHORT_5_5_5_1 ||
-      type === GL_UNSIGNED_SHORT_4_4_4_4 ||
-      type === GL_UNSIGNED_SHORT_5_6_5) {
-    return 2
-  } else if (type === GL_UNSIGNED_INT_24_8_WEBGL) {
-    return 4
-  } else {
-    return TYPE_SIZE[type] * channels
-  }
-}
-
-function isPow2 (v) {
-  return !(v & (v - 1)) && (!!v)
-}
-
-function checkTexture2D (info, mipData, limits) {
-  var i
-  var w = mipData.width
-  var h = mipData.height
-  var c = mipData.channels
-
-  // Check texture shape
-  check(w > 0 && w <= limits.maxTextureSize &&
-        h > 0 && h <= limits.maxTextureSize,
-  'invalid texture shape')
-
-  // check wrap mode
-  if (info.wrapS !== GL_CLAMP_TO_EDGE || info.wrapT !== GL_CLAMP_TO_EDGE) {
-    check(isPow2(w) && isPow2(h),
-      'incompatible wrap mode for texture, both width and height must be power of 2')
-  }
-
-  if (mipData.mipmask === 1) {
-    if (w !== 1 && h !== 1) {
-      check(
-        info.minFilter !== GL_NEAREST_MIPMAP_NEAREST &&
-        info.minFilter !== GL_NEAREST_MIPMAP_LINEAR &&
-        info.minFilter !== GL_LINEAR_MIPMAP_NEAREST &&
-        info.minFilter !== GL_LINEAR_MIPMAP_LINEAR,
-        'min filter requires mipmap')
-    }
-  } else {
-    // texture must be power of 2
-    check(isPow2(w) && isPow2(h),
-      'texture must be a square power of 2 to support mipmapping')
-    check(mipData.mipmask === (w << 1) - 1,
-      'missing or incomplete mipmap data')
-  }
-
-  if (mipData.type === GL_FLOAT) {
-    if (limits.extensions.indexOf('oes_texture_float_linear') < 0) {
-      check(info.minFilter === GL_NEAREST && info.magFilter === GL_NEAREST,
-        'filter not supported, must enable oes_texture_float_linear')
-    }
-    check(!info.genMipmaps,
-      'mipmap generation not supported with float textures')
-  }
-
-  // check image complete
-  var mipimages = mipData.images
-  for (i = 0; i < 16; ++i) {
-    if (mipimages[i]) {
-      var mw = w >> i
-      var mh = h >> i
-      check(mipData.mipmask & (1 << i), 'missing mipmap data')
-
-      var img = mipimages[i]
-
-      check(
-        img.width === mw &&
-        img.height === mh,
-        'invalid shape for mip images')
-
-      check(
-        img.format === mipData.format &&
-        img.internalformat === mipData.internalformat &&
-        img.type === mipData.type,
-        'incompatible type for mip image')
-
-      if (img.compressed) {
-        // TODO: check size for compressed images
-      } else if (img.data) {
-        // check(img.data.byteLength === mw * mh *
-        // Math.max(pixelSize(img.type, c), img.unpackAlignment),
-        var rowSize = Math.ceil(pixelSize(img.type, c) * mw / img.unpackAlignment) * img.unpackAlignment
-        check(img.data.byteLength === rowSize * mh,
-          'invalid data for image, buffer size is inconsistent with image format')
-      } else if (img.element) {
-        // TODO: check element can be loaded
-      } else if (img.copy) {
-        // TODO: check compatible format and type
-      }
-    } else if (!info.genMipmaps) {
-      check((mipData.mipmask & (1 << i)) === 0, 'extra mipmap data')
-    }
-  }
-
-  if (mipData.compressed) {
-    check(!info.genMipmaps,
-      'mipmap generation for compressed images not supported')
-  }
-}
-
-function checkTextureCube (texture, info, faces, limits) {
-  var w = texture.width
-  var h = texture.height
-  var c = texture.channels
-
-  // Check texture shape
-  check(
-    w > 0 && w <= limits.maxTextureSize && h > 0 && h <= limits.maxTextureSize,
-    'invalid texture shape')
-  check(
-    w === h,
-    'cube map must be square')
-  check(
-    info.wrapS === GL_CLAMP_TO_EDGE && info.wrapT === GL_CLAMP_TO_EDGE,
-    'wrap mode not supported by cube map')
-
-  for (var i = 0; i < faces.length; ++i) {
-    var face = faces[i]
-    check(
-      face.width === w && face.height === h,
-      'inconsistent cube map face shape')
-
-    if (info.genMipmaps) {
-      check(!face.compressed,
-        'can not generate mipmap for compressed textures')
-      check(face.mipmask === 1,
-        'can not specify mipmaps and generate mipmaps')
-    } else {
-      // TODO: check mip and filter mode
-    }
-
-    var mipmaps = face.images
-    for (var j = 0; j < 16; ++j) {
-      var img = mipmaps[j]
-      if (img) {
-        var mw = w >> j
-        var mh = h >> j
-        check(face.mipmask & (1 << j), 'missing mipmap data')
-        check(
-          img.width === mw &&
-          img.height === mh,
-          'invalid shape for mip images')
-        check(
-          img.format === texture.format &&
-          img.internalformat === texture.internalformat &&
-          img.type === texture.type,
-          'incompatible type for mip image')
-
-        if (img.compressed) {
-          // TODO: check size for compressed images
-        } else if (img.data) {
-          check(img.data.byteLength === mw * mh *
-            Math.max(pixelSize(img.type, c), img.unpackAlignment),
-          'invalid data for image, buffer size is inconsistent with image format')
-        } else if (img.element) {
-          // TODO: check element can be loaded
-        } else if (img.copy) {
-          // TODO: check compatible format and type
-        }
-      }
-    }
-  }
-}
-
-var check$1 = extend(check, {
-  optional: checkOptional,
-  raise: raise,
-  commandRaise: commandRaise,
-  command: checkCommand,
-  parameter: checkParameter,
-  commandParameter: checkParameterCommand,
-  constructor: checkConstructor,
-  type: checkTypeOf,
-  commandType: checkCommandType,
-  isTypedArray: checkIsTypedArray,
-  nni: checkNonNegativeInt,
-  oneOf: checkOneOf,
-  shaderError: checkShaderError,
-  linkError: checkLinkError,
-  callSite: guessCallSite,
-  saveCommandRef: saveCommandRef,
-  saveDrawInfo: saveDrawCommandInfo,
-  framebufferFormat: checkFramebufferFormat,
-  guessCommand: guessCommand,
-  texture2D: checkTexture2D,
-  textureCube: checkTextureCube
-});
 
 var VARIABLE_COUNTER = 0
 
@@ -791,6 +125,7 @@ function createStringStore () {
 }
 
 // Context and canvas creation helper functions
+
 function createCanvas (element, onDone, pixelRatio) {
   var canvas = document.createElement('canvas')
   extend(canvas.style, {
@@ -890,13 +225,13 @@ function parseExtensions (input) {
   if (typeof input === 'string') {
     return input.split()
   }
-  check$1(Array.isArray(input), 'invalid extension array')
+  
   return input
 }
 
 function getElement (desc) {
   if (typeof desc === 'string') {
-    check$1(typeof document !== 'undefined', 'not supported outside of DOM')
+    
     return document.querySelector(desc)
   }
   return desc
@@ -912,16 +247,14 @@ function parseArgs (args_) {
   var profile = false
   var onDone = function (err) {
     if (err) {
-      check$1.raise(err)
+      
     }
   }
   var onDestroy = function () {}
   if (typeof args === 'string') {
-    check$1(
-      typeof document !== 'undefined',
-      'selector queries only supported in DOM enviroments')
+    
     element = document.querySelector(args)
-    check$1(element, 'invalid query string for element')
+    
   } else if (typeof args === 'object') {
     if (isHTMLElement(args)) {
       element = args
@@ -929,7 +262,7 @@ function parseArgs (args_) {
       gl = args
       canvas = gl.canvas
     } else {
-      check$1.constructor(args)
+      
       if ('gl' in args) {
         gl = args.gl
       } else if ('canvas' in args) {
@@ -939,7 +272,7 @@ function parseArgs (args_) {
       }
       if ('attributes' in args) {
         contextAttributes = args.attributes
-        check$1.type(contextAttributes, 'object', 'invalid context attributes')
+        
       }
       if ('extensions' in args) {
         extensions = parseExtensions(args.extensions)
@@ -948,9 +281,7 @@ function parseArgs (args_) {
         optionalExtensions = parseExtensions(args.optionalExtensions)
       }
       if ('onDone' in args) {
-        check$1.type(
-          args.onDone, 'function',
-          'invalid or missing onDone callback')
+        
         onDone = args.onDone
       }
       if ('profile' in args) {
@@ -958,11 +289,11 @@ function parseArgs (args_) {
       }
       if ('pixelRatio' in args) {
         pixelRatio = +args.pixelRatio
-        check$1(pixelRatio > 0, 'invalid pixel ratio')
+        
       }
     }
   } else {
-    check$1.raise('invalid arguments to regl')
+    
   }
 
   if (element) {
@@ -975,9 +306,7 @@ function parseArgs (args_) {
 
   if (!gl) {
     if (!canvas) {
-      check$1(
-        typeof document !== 'undefined',
-        'must manually specify webgl context outside of DOM environments')
+      
       var result = createCanvas(container || document.body, onDone, pixelRatio)
       if (!result) {
         return null
@@ -1013,7 +342,7 @@ function createExtensionCache (gl, config) {
   var extensions = {}
 
   function tryLoadExtension (name_) {
-    check$1.type(name_, 'string', 'extension name must be string')
+    
     var name = name_.toLowerCase()
     var ext
     try {
@@ -1053,13 +382,13 @@ function loop (n, f) {
   return result
 }
 
-var GL_BYTE$1 = 5120
-var GL_UNSIGNED_BYTE$2 = 5121
-var GL_SHORT$1 = 5122
-var GL_UNSIGNED_SHORT$1 = 5123
-var GL_INT$1 = 5124
-var GL_UNSIGNED_INT$1 = 5125
-var GL_FLOAT$2 = 5126
+var GL_BYTE = 5120
+var GL_UNSIGNED_BYTE$1 = 5121
+var GL_SHORT = 5122
+var GL_UNSIGNED_SHORT = 5123
+var GL_INT = 5124
+var GL_UNSIGNED_INT = 5125
+var GL_FLOAT$1 = 5126
 
 function nextPow16 (v) {
   for (var i = 16; i <= (1 << 28); i *= 16) {
@@ -1104,25 +433,25 @@ function createPool () {
   function allocType (type, n) {
     var result = null
     switch (type) {
-      case GL_BYTE$1:
+      case GL_BYTE:
         result = new Int8Array(alloc(n), 0, n)
         break
-      case GL_UNSIGNED_BYTE$2:
+      case GL_UNSIGNED_BYTE$1:
         result = new Uint8Array(alloc(n), 0, n)
         break
-      case GL_SHORT$1:
+      case GL_SHORT:
         result = new Int16Array(alloc(2 * n), 0, n)
         break
-      case GL_UNSIGNED_SHORT$1:
+      case GL_UNSIGNED_SHORT:
         result = new Uint16Array(alloc(2 * n), 0, n)
         break
-      case GL_INT$1:
+      case GL_INT:
         result = new Int32Array(alloc(4 * n), 0, n)
         break
-      case GL_UNSIGNED_INT$1:
+      case GL_UNSIGNED_INT:
         result = new Uint32Array(alloc(4 * n), 0, n)
         break
-      case GL_FLOAT$2:
+      case GL_FLOAT$1:
         result = new Float32Array(alloc(4 * n), 0, n)
         break
       default:
@@ -1150,160 +479,6 @@ var pool = createPool()
 
 // zero pool for initial zero data
 pool.zero = createPool()
-
-var GL_DEPTH_COMPONENT = 0x1902
-var GL_DEPTH_STENCIL = 0x84F9
-var HALF_FLOAT_OES = 0x8D61
-
-var gl2Extensions = {
-  'WEBGL_depth_texture': {
-    'UNSIGNED_INT_24_8_WEBGL': 0x84FA
-  },
-  'OES_element_index_uint': {},
-  'OES_texture_float': {},
-  'OES_texture_half_float': {
-    'HALF_FLOAT_OES': 0x8D61
-  },
-  'EXT_color_buffer_float': {},
-  'OES_standard_derivatives': {},
-  'EXT_frag_depth': {},
-  'EXT_blend_minmax': {
-    'MIN_EXT': 0x8007,
-    'MAX_EXT': 0x8008
-  },
-  'EXT_shader_texture_lod': {}
-}
-
-var gl2 = {
-  // webgl1 extensions natively supported by webgl2
-  // this is called when initializing regl context
-  gl2: function (gl, extensions) {
-    gl[this.versionProperty] = 2
-    for (var p in gl2Extensions) {
-      extensions[p.toLowerCase()] = gl2Extensions[p]
-    }
-
-    // to support float and half-float textures
-    gl.getExtension('EXT_color_buffer_float')
-
-    // mocks of draw buffers's functions
-    extensions['webgl_draw_buffers'] = {
-      drawBuffersWEBGL: function () {
-        return gl.drawBuffers.apply(gl, arguments)
-      },
-      
-      // 'COLOR_ATTACHMENT0_WEBGL': 0x8CE0,
-      // 'COLOR_ATTACHMENT1_WEBGL': 0x8CE1,
-      // 'COLOR_ATTACHMENT2_WEBGL': 0x8CE2,
-      // 'COLOR_ATTACHMENT3_WEBGL': 0x8CE3,
-      // 'COLOR_ATTACHMENT4_WEBGL': 0x8CE4,
-      // 'COLOR_ATTACHMENT5_WEBGL': 0x8CE5,
-      // 'COLOR_ATTACHMENT6_WEBGL': 0x8CE6,
-      // 'COLOR_ATTACHMENT7_WEBGL': 0x8CE7,
-      // 'COLOR_ATTACHMENT8_WEBGL': 0x8CE8,
-      // 'COLOR_ATTACHMENT9_WEBGL': 0x8CE9,
-      // 'COLOR_ATTACHMENT10_WEBGL': 0x8CE10,
-      // 'COLOR_ATTACHMENT11_WEBGL': 0x8CE11,
-      // 'COLOR_ATTACHMENT12_WEBGL': 0x8CE12,
-      // 'COLOR_ATTACHMENT13_WEBGL': 0x8CE13,
-      // 'COLOR_ATTACHMENT14_WEBGL': 0x8CE14,
-      // 'COLOR_ATTACHMENT15_WEBGL': 0x8CE15,
-
-      // 'DRAW_BUFFER0_WEBGL': 0x8825,
-      // 'DRAW_BUFFER1_WEBGL': 0x8826,
-      // 'DRAW_BUFFER2_WEBGL': 0x8827,
-      // 'DRAW_BUFFER3_WEBGL': 0x8828,
-      // 'DRAW_BUFFER4_WEBGL': 0x8829,
-      // 'DRAW_BUFFER5_WEBGL': 0x882A,
-      // 'DRAW_BUFFER6_WEBGL': 0x882B,
-      // 'DRAW_BUFFER7_WEBGL': 0x882C,
-      // 'DRAW_BUFFER8_WEBGL': 0x882D,
-      // 'DRAW_BUFFER9_WEBGL': 0x882E,
-      // 'DRAW_BUFFER10_WEBGL': 0x882F,
-      // 'DRAW_BUFFER11_WEBGL': 0x8830,
-      // 'DRAW_BUFFER12_WEBGL': 0x8831,
-      // 'DRAW_BUFFER13_WEBGL': 0x8832,
-      // 'DRAW_BUFFER14_WEBGL': 0x8833,
-      // 'DRAW_BUFFER15_WEBGL': 0x8834,
-      // 'MAX_COLOR_ATTACHMENTS_WEBGL': 0x8CDF,
-      // 'MAX_DRAW_BUFFERS_WEBGL': 0x8824
-    }
-
-    // mocks of vao functions
-    extensions['oes_vertex_array_object'] = {
-      'VERTEX_ARRAY_BINDING_OES':   0x85B5,
-      'createVertexArrayOES': function () {
-        return gl.createVertexArray()
-      },
-      'deleteVertexArrayOES': function () {
-        return gl.deleteVertexArray.apply(gl, arguments)
-      },
-      'isVertexArrayOES': function () {
-        return gl.isVertexArray.apply(gl, arguments)
-      },
-      'bindVertexArrayOES': function () {
-        return gl.bindVertexArray.apply(gl, arguments)
-      }
-    }
-
-    // mocks of instancing extension
-    extensions['angle_instanced_arrays'] = {
-      'VERTEX_ATTRIB_ARRAY_DIVISOR_ANGLE': 0x88FE,
-      'drawArraysInstancedANGLE': function () {
-        return gl.drawArraysInstanced.apply(gl, arguments)
-      },
-      'drawElementsInstancedANGLE': function () {
-        return gl.drawElementsInstanced.apply(gl, arguments)
-      },
-      'vertexAttribDivisorANGLE': function () {
-        return gl.vertexAttribDivisor.apply(gl, arguments)
-      }
-    }
-  },
-
-  versionProperty: '___regl_gl_version___',
-
-  // texture internal format to update on the fly
-  getInternalFormat: function (gl, format, type) {
-    if (gl[this.versionProperty] !== 2) {
-      return format
-    }
-    // webgl2 texture formats
-    // reference:
-    // https://webgl2fundamentals.org/webgl/lessons/webgl-data-textures.html
-    if (format === GL_DEPTH_COMPONENT) {
-      // gl.DEPTH_COMPONENT24
-      return 0x81A6
-    } else if (format === GL_DEPTH_STENCIL) {
-      // gl.DEPTH24_STENCIL8
-      return 0x88F0
-    } else if (type === HALF_FLOAT_OES && format === gl.RGBA) {
-      // gl.RGBA16F
-      return 0x881A
-    } else if (type === HALF_FLOAT_OES && format === gl.RGB) {
-      // gl.RGB16F
-      return 0x881B
-    } else if (type === gl.FLOAT && format === gl.RGBA) {
-      // gl.RGBA32F
-      return 0x8814
-    } else if (type === gl.FLOAT && format === gl.RGB) {
-      // gl.RGB32F
-      return 0x8815
-    }
-    return format
-  },
-
-  // texture type to update on the fly
-  getTextureType: function (gl, type) {
-    if (gl[this.versionProperty] !== 2) {
-      return type
-    }
-    if (type === HALF_FLOAT_OES) {
-      return gl.HALF_FLOAT
-    }
-    return type
-  }
-};
 
 var GL_SUBPIXEL_BITS = 0x0D50
 var GL_RED_BITS = 0x0D52
@@ -1343,8 +518,8 @@ var GL_TEXTURE_CUBE_MAP = 0x8513
 var GL_TEXTURE_CUBE_MAP_POSITIVE_X = 0x8515
 var GL_TEXTURE0 = 0x84C0
 var GL_RGBA = 0x1908
-var GL_FLOAT$1 = 0x1406
-var GL_UNSIGNED_BYTE$1 = 0x1401
+var GL_FLOAT = 0x1406
+var GL_UNSIGNED_BYTE = 0x1401
 var GL_FRAMEBUFFER = 0x8D40
 var GL_FRAMEBUFFER_COMPLETE = 0x8CD5
 var GL_COLOR_ATTACHMENT0 = 0x8CE0
@@ -1368,9 +543,7 @@ var wrapLimits = function (gl, extensions) {
   if (readFloat) {
     var readFloatTexture = gl.createTexture()
     gl.bindTexture(GL_TEXTURE_2D, readFloatTexture)
-
-    var internalFormat = gl2.getInternalFormat(gl, GL_RGBA, GL_FLOAT$1)
-    gl.texImage2D(GL_TEXTURE_2D, 0, internalFormat, 1, 1, 0, GL_RGBA, GL_FLOAT$1, null)
+    gl.texImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_FLOAT, null)
 
     var fbo = gl.createFramebuffer()
     gl.bindFramebuffer(GL_FRAMEBUFFER, fbo)
@@ -1383,8 +556,8 @@ var wrapLimits = function (gl, extensions) {
       gl.viewport(0, 0, 1, 1)
       gl.clearColor(1.0, 0.0, 0.0, 1.0)
       gl.clear(GL_COLOR_BUFFER_BIT$1)
-      var pixels = pool.allocType(GL_FLOAT$1, 4)
-      gl.readPixels(0, 0, 1, 1, GL_RGBA, GL_FLOAT$1, pixels)
+      var pixels = pool.allocType(GL_FLOAT, 4)
+      gl.readPixels(0, 0, 1, 1, GL_RGBA, GL_FLOAT, pixels)
 
       if (gl.getError()) readFloat = false
       else {
@@ -1405,10 +578,10 @@ var wrapLimits = function (gl, extensions) {
 
   if (!isIE) {
     var cubeTexture = gl.createTexture()
-    var data = pool.allocType(GL_UNSIGNED_BYTE$1, 36)
+    var data = pool.allocType(GL_UNSIGNED_BYTE, 36)
     gl.activeTexture(GL_TEXTURE0)
     gl.bindTexture(GL_TEXTURE_CUBE_MAP, cubeTexture)
-    gl.texImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X, 0, GL_RGBA, 3, 3, 0, GL_RGBA, GL_UNSIGNED_BYTE$1, data)
+    gl.texImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X, 0, GL_RGBA, 3, 3, 0, GL_RGBA, GL_UNSIGNED_BYTE, data)
     pool.freeType(data)
     gl.bindTexture(GL_TEXTURE_CUBE_MAP, null)
     gl.deleteTexture(cubeTexture)
@@ -1464,6 +637,20 @@ var wrapLimits = function (gl, extensions) {
     readFloat: readFloat,
     npotTextureCube: npotTextureCube
   }
+}
+
+var isTypedArray = function (x) {
+  return (
+    x instanceof Uint8Array ||
+    x instanceof Uint16Array ||
+    x instanceof Uint32Array ||
+    x instanceof Int8Array ||
+    x instanceof Int16Array ||
+    x instanceof Int32Array ||
+    x instanceof Float32Array ||
+    x instanceof Float64Array ||
+    x instanceof Uint8ClampedArray
+  )
 }
 
 function isNDArrayLike (obj) {
@@ -1574,7 +761,7 @@ function arrayShape$1 (array_) {
   return shape
 }
 
-var arrayTypes =  {
+var arrayTypes = {
 	"[object Int8Array]": 5120,
 	"[object Int16Array]": 5122,
 	"[object Int32Array]": 5124,
@@ -1620,8 +807,8 @@ var arrayShape = flattenUtils.shape
 var GL_STATIC_DRAW = 0x88E4
 var GL_STREAM_DRAW = 0x88E0
 
-var GL_UNSIGNED_BYTE$3 = 5121
-var GL_FLOAT$3 = 5126
+var GL_UNSIGNED_BYTE$2 = 5121
+var GL_FLOAT$2 = 5126
 
 var DTYPES_SIZES = []
 DTYPES_SIZES[5120] = 1 // int8
@@ -1663,7 +850,7 @@ function wrapBufferState (gl, stats, config, destroyBuffer) {
     this.usage = GL_STATIC_DRAW
     this.byteLength = 0
     this.dimension = 1
-    this.dtype = GL_UNSIGNED_BYTE$3
+    this.dtype = GL_UNSIGNED_BYTE$2
 
     this.persistentData = null
 
@@ -1705,7 +892,7 @@ function wrapBufferState (gl, stats, config, destroyBuffer) {
     var shape
     buffer.usage = usage
     if (Array.isArray(data)) {
-      buffer.dtype = dtype || GL_FLOAT$3
+      buffer.dtype = dtype || GL_FLOAT$2
       if (data.length > 0) {
         var flatData
         if (Array.isArray(data[0])) {
@@ -1734,7 +921,7 @@ function wrapBufferState (gl, stats, config, destroyBuffer) {
           }
         } else if (isTypedArray(data[0])) {
           buffer.dimension = data[0].length
-          buffer.dtype = dtype || typedArrayCode(data[0]) || GL_FLOAT$3
+          buffer.dtype = dtype || typedArrayCode(data[0]) || GL_FLOAT$2
           flatData = arrayFlatten(
             data,
             [data.length, data[0].length],
@@ -1746,7 +933,7 @@ function wrapBufferState (gl, stats, config, destroyBuffer) {
             pool.freeType(flatData)
           }
         } else {
-          check$1.raise('invalid buffer data')
+          
         }
       }
     } else if (isTypedArray(data)) {
@@ -1776,10 +963,10 @@ function wrapBufferState (gl, stats, config, destroyBuffer) {
         strideX = stride[0]
         strideY = stride[1]
       } else {
-        check$1.raise('invalid shape')
+        
       }
 
-      buffer.dtype = dtype || typedArrayCode(data.data) || GL_FLOAT$3
+      buffer.dtype = dtype || typedArrayCode(data.data) || GL_FLOAT$2
       buffer.dimension = shapeY
 
       var transposeData = pool.allocType(buffer.dtype, shapeX * shapeY)
@@ -1795,14 +982,14 @@ function wrapBufferState (gl, stats, config, destroyBuffer) {
         pool.freeType(transposeData)
       }
     } else if (data instanceof ArrayBuffer) {
-      buffer.dtype = GL_UNSIGNED_BYTE$3
+      buffer.dtype = GL_UNSIGNED_BYTE$2
       buffer.dimension = dimension
       initBufferFromTypedArray(buffer, data, usage)
       if (persist) {
         buffer.persistentData = new Uint8Array(new Uint8Array(data))
       }
     } else {
-      check$1.raise('invalid buffer data')
+      
     }
   }
 
@@ -1813,7 +1000,7 @@ function wrapBufferState (gl, stats, config, destroyBuffer) {
     destroyBuffer(buffer)
 
     var handle = buffer.buffer
-    check$1(handle, 'buffer must not be deleted already')
+    
     gl.deleteBuffer(handle)
     buffer.buffer = null
     delete bufferSet[buffer.id]
@@ -1839,37 +1026,30 @@ function wrapBufferState (gl, stats, config, destroyBuffer) {
       } else if (typeof options === 'number') {
         byteLength = options | 0
       } else if (options) {
-        check$1.type(
-          options, 'object',
-          'buffer arguments must be an object, a number or an array')
+        
 
         if ('data' in options) {
-          check$1(
-            data === null ||
-            Array.isArray(data) ||
-            isTypedArray(data) ||
-            isNDArrayLike(data),
-            'invalid data for buffer')
+          
           data = options.data
         }
 
         if ('usage' in options) {
-          check$1.parameter(options.usage, usageTypes, 'invalid buffer usage')
+          
           usage = usageTypes[options.usage]
         }
 
         if ('type' in options) {
-          check$1.parameter(options.type, glTypes, 'invalid buffer type')
+          
           dtype = glTypes[options.type]
         }
 
         if ('dimension' in options) {
-          check$1.type(options.dimension, 'number', 'invalid dimension')
+          
           dimension = options.dimension | 0
         }
 
         if ('length' in options) {
-          check$1.nni(byteLength, 'buffer length must be a nonnegative integer')
+          
           byteLength = options.length | 0
         }
       }
@@ -1878,7 +1058,7 @@ function wrapBufferState (gl, stats, config, destroyBuffer) {
       if (!data) {
         // #475
         if (byteLength) gl.bufferData(buffer.type, byteLength, usage)
-        buffer.dtype = dtype || GL_UNSIGNED_BYTE$3
+        buffer.dtype = dtype || GL_UNSIGNED_BYTE$2
         buffer.usage = usage
         buffer.dimension = dimension
         buffer.byteLength = byteLength
@@ -1894,8 +1074,7 @@ function wrapBufferState (gl, stats, config, destroyBuffer) {
     }
 
     function setSubData (data, offset) {
-      check$1(offset + data.byteLength <= buffer.byteLength,
-        'invalid buffer subdata call, buffer is too small. ' + ' Can\'t write data of size ' + data.byteLength + ' starting from offset ' + offset + ' to a buffer of size ' + buffer.byteLength)
+      
 
       gl.bufferSubData(buffer.type, offset, data)
     }
@@ -1919,7 +1098,7 @@ function wrapBufferState (gl, stats, config, destroyBuffer) {
             setSubData(flatData, offset)
             pool.freeType(flatData)
           } else {
-            check$1.raise('invalid buffer data')
+            
           }
         }
       } else if (isNDArrayLike(data)) {
@@ -1941,7 +1120,7 @@ function wrapBufferState (gl, stats, config, destroyBuffer) {
           strideX = stride[0]
           strideY = stride[1]
         } else {
-          check$1.raise('invalid shape')
+          
         }
         var dtype = Array.isArray(data.data)
           ? buffer.dtype
@@ -1956,7 +1135,7 @@ function wrapBufferState (gl, stats, config, destroyBuffer) {
         setSubData(transposeData, offset)
         pool.freeType(transposeData)
       } else {
-        check$1.raise('invalid data for buffer subdata')
+        
       }
       return reglBuffer
     }
@@ -2043,12 +1222,12 @@ var GL_POINTS = 0
 var GL_LINES = 1
 var GL_TRIANGLES = 4
 
-var GL_BYTE$2 = 5120
-var GL_UNSIGNED_BYTE$4 = 5121
-var GL_SHORT$2 = 5122
-var GL_UNSIGNED_SHORT$2 = 5123
-var GL_INT$2 = 5124
-var GL_UNSIGNED_INT$2 = 5125
+var GL_BYTE$1 = 5120
+var GL_UNSIGNED_BYTE$3 = 5121
+var GL_SHORT$1 = 5122
+var GL_UNSIGNED_SHORT$1 = 5123
+var GL_INT$1 = 5124
+var GL_UNSIGNED_INT$1 = 5125
 
 var GL_ELEMENT_ARRAY_BUFFER = 34963
 
@@ -2060,12 +1239,12 @@ function wrapElementsState (gl, extensions, bufferState, stats) {
   var elementCount = 0
 
   var elementTypes = {
-    'uint8': GL_UNSIGNED_BYTE$4,
-    'uint16': GL_UNSIGNED_SHORT$2
+    'uint8': GL_UNSIGNED_BYTE$3,
+    'uint16': GL_UNSIGNED_SHORT$1
   }
 
   if (extensions.oes_element_index_uint) {
-    elementTypes.uint32 = GL_UNSIGNED_INT$2
+    elementTypes.uint32 = GL_UNSIGNED_INT$1
   }
 
   function REGLElementBuffer (buffer) {
@@ -2116,8 +1295,8 @@ function wrapElementsState (gl, extensions, bufferState, stats) {
         !isTypedArray(data) ||
          (isNDArrayLike(data) && !isTypedArray(data.data)))) {
         predictedType = extensions.oes_element_index_uint
-          ? GL_UNSIGNED_INT$2
-          : GL_UNSIGNED_SHORT$2
+          ? GL_UNSIGNED_INT$1
+          : GL_UNSIGNED_SHORT$1
       }
       bufferState._initBuffer(
         elements.buffer,
@@ -2127,7 +1306,7 @@ function wrapElementsState (gl, extensions, bufferState, stats) {
         3)
     } else {
       gl.bufferData(GL_ELEMENT_ARRAY_BUFFER, byteLength, usage)
-      elements.buffer.dtype = dtype || GL_UNSIGNED_BYTE$4
+      elements.buffer.dtype = dtype || GL_UNSIGNED_BYTE$3
       elements.buffer.usage = usage
       elements.buffer.dimension = 3
       elements.buffer.byteLength = byteLength
@@ -2136,41 +1315,38 @@ function wrapElementsState (gl, extensions, bufferState, stats) {
     dtype = type
     if (!type) {
       switch (elements.buffer.dtype) {
-        case GL_UNSIGNED_BYTE$4:
-        case GL_BYTE$2:
-          dtype = GL_UNSIGNED_BYTE$4
+        case GL_UNSIGNED_BYTE$3:
+        case GL_BYTE$1:
+          dtype = GL_UNSIGNED_BYTE$3
           break
 
-        case GL_UNSIGNED_SHORT$2:
-        case GL_SHORT$2:
-          dtype = GL_UNSIGNED_SHORT$2
+        case GL_UNSIGNED_SHORT$1:
+        case GL_SHORT$1:
+          dtype = GL_UNSIGNED_SHORT$1
           break
 
-        case GL_UNSIGNED_INT$2:
-        case GL_INT$2:
-          dtype = GL_UNSIGNED_INT$2
+        case GL_UNSIGNED_INT$1:
+        case GL_INT$1:
+          dtype = GL_UNSIGNED_INT$1
           break
 
         default:
-          check$1.raise('unsupported type for element array')
+          
       }
       elements.buffer.dtype = dtype
     }
     elements.type = dtype
 
     // Check oes_element_index_uint extension
-    check$1(
-      dtype !== GL_UNSIGNED_INT$2 ||
-      !!extensions.oes_element_index_uint,
-      '32 bit element buffers not supported, enable oes_element_index_uint first')
+    
 
     // try to guess default primitive type and arguments
     var vertCount = count
     if (vertCount < 0) {
       vertCount = elements.buffer.byteLength
-      if (dtype === GL_UNSIGNED_SHORT$2) {
+      if (dtype === GL_UNSIGNED_SHORT$1) {
         vertCount >>= 1
-      } else if (dtype === GL_UNSIGNED_INT$2) {
+      } else if (dtype === GL_UNSIGNED_INT$1) {
         vertCount >>= 2
       }
     }
@@ -2191,7 +1367,7 @@ function wrapElementsState (gl, extensions, bufferState, stats) {
   function destroyElements (elements) {
     stats.elementsCount--
 
-    check$1(elements.buffer !== null, 'must not double destroy elements')
+    
     delete elementSet[elements.id]
     elements.buffer.destroy()
     elements.buffer = null
@@ -2207,12 +1383,12 @@ function wrapElementsState (gl, extensions, bufferState, stats) {
         buffer()
         elements.primType = GL_TRIANGLES
         elements.vertCount = 0
-        elements.type = GL_UNSIGNED_BYTE$4
+        elements.type = GL_UNSIGNED_BYTE$3
       } else if (typeof options === 'number') {
         buffer(options)
         elements.primType = GL_TRIANGLES
         elements.vertCount = options | 0
-        elements.type = GL_UNSIGNED_BYTE$4
+        elements.type = GL_UNSIGNED_BYTE$3
       } else {
         var data = null
         var usage = GL_STATIC_DRAW$1
@@ -2225,49 +1401,34 @@ function wrapElementsState (gl, extensions, bufferState, stats) {
             isNDArrayLike(options)) {
           data = options
         } else {
-          check$1.type(options, 'object', 'invalid arguments for elements')
+          
           if ('data' in options) {
             data = options.data
-            check$1(
-              Array.isArray(data) ||
-                isTypedArray(data) ||
-                isNDArrayLike(data),
-              'invalid data for element buffer')
+            
           }
           if ('usage' in options) {
-            check$1.parameter(
-              options.usage,
-              usageTypes,
-              'invalid element buffer usage')
+            
             usage = usageTypes[options.usage]
           }
           if ('primitive' in options) {
-            check$1.parameter(
-              options.primitive,
-              primTypes,
-              'invalid element buffer primitive')
+            
             primType = primTypes[options.primitive]
           }
           if ('count' in options) {
-            check$1(
-              typeof options.count === 'number' && options.count >= 0,
-              'invalid vertex count for elements')
+            
             vertCount = options.count | 0
           }
           if ('type' in options) {
-            check$1.parameter(
-              options.type,
-              elementTypes,
-              'invalid buffer type')
+            
             dtype = elementTypes[options.type]
           }
           if ('length' in options) {
             byteLength = options.length | 0
           } else {
             byteLength = vertCount
-            if (dtype === GL_UNSIGNED_SHORT$2 || dtype === GL_SHORT$2) {
+            if (dtype === GL_UNSIGNED_SHORT$1 || dtype === GL_SHORT$1) {
               byteLength *= 2
-            } else if (dtype === GL_UNSIGNED_INT$2 || dtype === GL_INT$2) {
+            } else if (dtype === GL_UNSIGNED_INT$1 || dtype === GL_INT$1) {
               byteLength *= 4
             }
           }
@@ -2320,10 +1481,10 @@ function wrapElementsState (gl, extensions, bufferState, stats) {
 var FLOAT = new Float32Array(1)
 var INT = new Uint32Array(FLOAT.buffer)
 
-var GL_UNSIGNED_SHORT$4 = 5123
+var GL_UNSIGNED_SHORT$3 = 5123
 
 function convertToHalfFloat (array) {
-  var ushorts = pool.allocType(GL_UNSIGNED_SHORT$4, array.length)
+  var ushorts = pool.allocType(GL_UNSIGNED_SHORT$3, array.length)
 
   for (var i = 0; i < array.length; ++i) {
     if (isNaN(array[i])) {
@@ -2364,10 +1525,6 @@ function isArrayLike (s) {
   return Array.isArray(s) || isTypedArray(s)
 }
 
-var isPow2$1 = function (v) {
-  return !(v & (v - 1)) && (!!v)
-}
-
 var GL_COMPRESSED_TEXTURE_FORMATS = 0x86A3
 
 var GL_TEXTURE_2D$1 = 0x0DE1
@@ -2384,18 +1541,18 @@ var GL_RGBA4 = 0x8056
 var GL_RGB5_A1 = 0x8057
 var GL_RGB565 = 0x8D62
 
-var GL_UNSIGNED_SHORT_4_4_4_4$1 = 0x8033
-var GL_UNSIGNED_SHORT_5_5_5_1$1 = 0x8034
-var GL_UNSIGNED_SHORT_5_6_5$1 = 0x8363
-var GL_UNSIGNED_INT_24_8_WEBGL$1 = 0x84FA
+var GL_UNSIGNED_SHORT_4_4_4_4 = 0x8033
+var GL_UNSIGNED_SHORT_5_5_5_1 = 0x8034
+var GL_UNSIGNED_SHORT_5_6_5 = 0x8363
+var GL_UNSIGNED_INT_24_8_WEBGL = 0x84FA
 
-var GL_DEPTH_COMPONENT$1 = 0x1902
-var GL_DEPTH_STENCIL$1 = 0x84F9
+var GL_DEPTH_COMPONENT = 0x1902
+var GL_DEPTH_STENCIL = 0x84F9
 
 var GL_SRGB_EXT = 0x8C40
 var GL_SRGB_ALPHA_EXT = 0x8C42
 
-var GL_HALF_FLOAT_OES$1 = 0x8D61
+var GL_HALF_FLOAT_OES = 0x8D61
 
 var GL_COMPRESSED_RGB_S3TC_DXT1_EXT = 0x83F0
 var GL_COMPRESSED_RGBA_S3TC_DXT1_EXT = 0x83F1
@@ -2413,27 +1570,27 @@ var GL_COMPRESSED_RGBA_PVRTC_2BPPV1_IMG = 0x8C03
 
 var GL_COMPRESSED_RGB_ETC1_WEBGL = 0x8D64
 
-var GL_UNSIGNED_BYTE$5 = 0x1401
-var GL_UNSIGNED_SHORT$3 = 0x1403
-var GL_UNSIGNED_INT$3 = 0x1405
-var GL_FLOAT$4 = 0x1406
+var GL_UNSIGNED_BYTE$4 = 0x1401
+var GL_UNSIGNED_SHORT$2 = 0x1403
+var GL_UNSIGNED_INT$2 = 0x1405
+var GL_FLOAT$3 = 0x1406
 
 var GL_TEXTURE_WRAP_S = 0x2802
 var GL_TEXTURE_WRAP_T = 0x2803
 
 var GL_REPEAT = 0x2901
-var GL_CLAMP_TO_EDGE$1 = 0x812F
+var GL_CLAMP_TO_EDGE = 0x812F
 var GL_MIRRORED_REPEAT = 0x8370
 
 var GL_TEXTURE_MAG_FILTER = 0x2800
 var GL_TEXTURE_MIN_FILTER = 0x2801
 
-var GL_NEAREST$1 = 0x2600
+var GL_NEAREST = 0x2600
 var GL_LINEAR = 0x2601
-var GL_NEAREST_MIPMAP_NEAREST$1 = 0x2700
-var GL_LINEAR_MIPMAP_NEAREST$1 = 0x2701
-var GL_NEAREST_MIPMAP_LINEAR$1 = 0x2702
-var GL_LINEAR_MIPMAP_LINEAR$1 = 0x2703
+var GL_NEAREST_MIPMAP_NEAREST = 0x2700
+var GL_LINEAR_MIPMAP_NEAREST = 0x2701
+var GL_NEAREST_MIPMAP_LINEAR = 0x2702
+var GL_LINEAR_MIPMAP_LINEAR = 0x2703
 
 var GL_GENERATE_MIPMAP_HINT = 0x8192
 var GL_DONT_CARE = 0x1100
@@ -2452,10 +1609,10 @@ var GL_BROWSER_DEFAULT_WEBGL = 0x9244
 var GL_TEXTURE0$1 = 0x84C0
 
 var MIPMAP_FILTERS = [
-  GL_NEAREST_MIPMAP_NEAREST$1,
-  GL_NEAREST_MIPMAP_LINEAR$1,
-  GL_LINEAR_MIPMAP_NEAREST$1,
-  GL_LINEAR_MIPMAP_LINEAR$1
+  GL_NEAREST_MIPMAP_NEAREST,
+  GL_NEAREST_MIPMAP_LINEAR,
+  GL_LINEAR_MIPMAP_NEAREST,
+  GL_LINEAR_MIPMAP_LINEAR
 ]
 
 var CHANNELS_FORMAT = [
@@ -2469,8 +1626,8 @@ var CHANNELS_FORMAT = [
 var FORMAT_CHANNELS = {}
 FORMAT_CHANNELS[GL_LUMINANCE] =
 FORMAT_CHANNELS[GL_ALPHA] =
-FORMAT_CHANNELS[GL_DEPTH_COMPONENT$1] = 1
-FORMAT_CHANNELS[GL_DEPTH_STENCIL$1] =
+FORMAT_CHANNELS[GL_DEPTH_COMPONENT] = 1
+FORMAT_CHANNELS[GL_DEPTH_STENCIL] =
 FORMAT_CHANNELS[GL_LUMINANCE_ALPHA] = 2
 FORMAT_CHANNELS[GL_RGB] =
 FORMAT_CHANNELS[GL_SRGB_EXT] = 3
@@ -2500,18 +1657,18 @@ var PIXEL_CLASSES = Object.keys(arrayTypes).concat([
 // for every texture type, store
 // the size in bytes.
 var TYPE_SIZES = []
-TYPE_SIZES[GL_UNSIGNED_BYTE$5] = 1
-TYPE_SIZES[GL_FLOAT$4] = 4
-TYPE_SIZES[GL_HALF_FLOAT_OES$1] = 2
+TYPE_SIZES[GL_UNSIGNED_BYTE$4] = 1
+TYPE_SIZES[GL_FLOAT$3] = 4
+TYPE_SIZES[GL_HALF_FLOAT_OES] = 2
 
-TYPE_SIZES[GL_UNSIGNED_SHORT$3] = 2
-TYPE_SIZES[GL_UNSIGNED_INT$3] = 4
+TYPE_SIZES[GL_UNSIGNED_SHORT$2] = 2
+TYPE_SIZES[GL_UNSIGNED_INT$2] = 4
 
 var FORMAT_SIZES_SPECIAL = []
 FORMAT_SIZES_SPECIAL[GL_RGBA4] = 2
 FORMAT_SIZES_SPECIAL[GL_RGB5_A1] = 2
 FORMAT_SIZES_SPECIAL[GL_RGB565] = 2
-FORMAT_SIZES_SPECIAL[GL_DEPTH_STENCIL$1] = 4
+FORMAT_SIZES_SPECIAL[GL_DEPTH_STENCIL] = 4
 
 FORMAT_SIZES_SPECIAL[GL_COMPRESSED_RGB_S3TC_DXT1_EXT] = 0.5
 FORMAT_SIZES_SPECIAL[GL_COMPRESSED_RGBA_S3TC_DXT1_EXT] = 0.5
@@ -2596,33 +1753,33 @@ function typedArrayCode$1 (data) {
 function convertData (result, data) {
   var n = data.length
   switch (result.type) {
-    case GL_UNSIGNED_BYTE$5:
-    case GL_UNSIGNED_SHORT$3:
-    case GL_UNSIGNED_INT$3:
-    case GL_FLOAT$4:
+    case GL_UNSIGNED_BYTE$4:
+    case GL_UNSIGNED_SHORT$2:
+    case GL_UNSIGNED_INT$2:
+    case GL_FLOAT$3:
       var converted = pool.allocType(result.type, n)
       converted.set(data)
       result.data = converted
       break
 
-    case GL_HALF_FLOAT_OES$1:
+    case GL_HALF_FLOAT_OES:
       result.data = convertToHalfFloat(data)
       break
 
     default:
-      check$1.raise('unsupported texture type, must specify a typed array')
+      
   }
 }
 
 function preConvert (image, n) {
   return pool.allocType(
-    image.type === GL_HALF_FLOAT_OES$1
-      ? GL_FLOAT$4
+    image.type === GL_HALF_FLOAT_OES
+      ? GL_FLOAT$3
       : image.type, n)
 }
 
 function postConvert (image, data) {
-  if (image.type === GL_HALF_FLOAT_OES$1) {
+  if (image.type === GL_HALF_FLOAT_OES) {
     image.data = convertToHalfFloat(data)
     pool.freeType(data)
   } else {
@@ -2693,21 +1850,21 @@ function createTextureSet (
 
   var wrapModes = {
     'repeat': GL_REPEAT,
-    'clamp': GL_CLAMP_TO_EDGE$1,
+    'clamp': GL_CLAMP_TO_EDGE,
     'mirror': GL_MIRRORED_REPEAT
   }
 
   var magFilters = {
-    'nearest': GL_NEAREST$1,
+    'nearest': GL_NEAREST,
     'linear': GL_LINEAR
   }
 
   var minFilters = extend({
-    'mipmap': GL_LINEAR_MIPMAP_LINEAR$1,
-    'nearest mipmap nearest': GL_NEAREST_MIPMAP_NEAREST$1,
-    'linear mipmap nearest': GL_LINEAR_MIPMAP_NEAREST$1,
-    'nearest mipmap linear': GL_NEAREST_MIPMAP_LINEAR$1,
-    'linear mipmap linear': GL_LINEAR_MIPMAP_LINEAR$1
+    'mipmap': GL_LINEAR_MIPMAP_LINEAR,
+    'nearest mipmap nearest': GL_NEAREST_MIPMAP_NEAREST,
+    'linear mipmap nearest': GL_LINEAR_MIPMAP_NEAREST,
+    'nearest mipmap linear': GL_NEAREST_MIPMAP_LINEAR,
+    'linear mipmap linear': GL_LINEAR_MIPMAP_LINEAR
   }, magFilters)
 
   var colorSpace = {
@@ -2716,10 +1873,10 @@ function createTextureSet (
   }
 
   var textureTypes = {
-    'uint8': GL_UNSIGNED_BYTE$5,
-    'rgba4': GL_UNSIGNED_SHORT_4_4_4_4$1,
-    'rgb565': GL_UNSIGNED_SHORT_5_6_5$1,
-    'rgb5 a1': GL_UNSIGNED_SHORT_5_5_5_1$1
+    'uint8': GL_UNSIGNED_BYTE$4,
+    'rgba4': GL_UNSIGNED_SHORT_4_4_4_4,
+    'rgb565': GL_UNSIGNED_SHORT_5_6_5,
+    'rgb5 a1': GL_UNSIGNED_SHORT_5_5_5_1
   }
 
   var textureFormats = {
@@ -2741,23 +1898,23 @@ function createTextureSet (
   }
 
   if (extensions.oes_texture_float) {
-    textureTypes.float32 = textureTypes.float = GL_FLOAT$4
+    textureTypes.float32 = textureTypes.float = GL_FLOAT$3
   }
 
   if (extensions.oes_texture_half_float) {
-    textureTypes['float16'] = textureTypes['half float'] = GL_HALF_FLOAT_OES$1
+    textureTypes['float16'] = textureTypes['half float'] = GL_HALF_FLOAT_OES
   }
 
   if (extensions.webgl_depth_texture) {
     extend(textureFormats, {
-      'depth': GL_DEPTH_COMPONENT$1,
-      'depth stencil': GL_DEPTH_STENCIL$1
+      'depth': GL_DEPTH_COMPONENT,
+      'depth stencil': GL_DEPTH_STENCIL
     })
 
     extend(textureTypes, {
-      'uint16': GL_UNSIGNED_SHORT$3,
-      'uint32': GL_UNSIGNED_INT$3,
-      'depth stencil': GL_UNSIGNED_INT_24_8_WEBGL$1
+      'uint16': GL_UNSIGNED_SHORT$2,
+      'uint32': GL_UNSIGNED_INT$2,
+      'depth stencil': GL_UNSIGNED_INT_24_8_WEBGL
     })
   }
 
@@ -2846,8 +2003,8 @@ function createTextureSet (
         glenum === GL_ALPHA ||
         glenum === GL_LUMINANCE ||
         glenum === GL_LUMINANCE_ALPHA ||
-        glenum === GL_DEPTH_COMPONENT$1 ||
-        glenum === GL_DEPTH_STENCIL$1 ||
+        glenum === GL_DEPTH_COMPONENT ||
+        glenum === GL_DEPTH_STENCIL ||
         (extensions.ext_srgb &&
                 (glenum === GL_SRGB_EXT ||
                  glenum === GL_SRGB_ALPHA_EXT))) {
@@ -2864,7 +2021,7 @@ function createTextureSet (
     // format info
     this.internalformat = GL_RGBA$1
     this.format = GL_RGBA$1
-    this.type = GL_UNSIGNED_BYTE$5
+    this.type = GL_UNSIGNED_BYTE$4
     this.compressed = false
 
     // pixel storage
@@ -2901,42 +2058,31 @@ function createTextureSet (
     }
 
     if ('premultiplyAlpha' in options) {
-      check$1.type(options.premultiplyAlpha, 'boolean',
-        'invalid premultiplyAlpha')
+      
       flags.premultiplyAlpha = options.premultiplyAlpha
     }
 
     if ('flipY' in options) {
-      check$1.type(options.flipY, 'boolean',
-        'invalid texture flip')
+      
       flags.flipY = options.flipY
     }
 
     if ('alignment' in options) {
-      check$1.oneOf(options.alignment, [1, 2, 4, 8],
-        'invalid texture unpack alignment')
+      
       flags.unpackAlignment = options.alignment
     }
 
     if ('colorSpace' in options) {
-      check$1.parameter(options.colorSpace, colorSpace,
-        'invalid colorSpace')
+      
       flags.colorSpace = colorSpace[options.colorSpace]
     }
 
     if ('type' in options) {
       var type = options.type
-      check$1(extensions.oes_texture_float ||
-        !(type === 'float' || type === 'float32'),
-      'you must enable the OES_texture_float extension in order to use floating point textures.')
-      check$1(extensions.oes_texture_half_float ||
-        !(type === 'half float' || type === 'float16'),
-      'you must enable the OES_texture_half_float extension in order to use 16-bit floating point textures.')
-      check$1(extensions.webgl_depth_texture ||
-        !(type === 'uint16' || type === 'uint32' || type === 'depth stencil'),
-      'you must enable the WEBGL_depth_texture extension in order to use depth/stencil textures.')
-      check$1.parameter(type, textureTypes,
-        'invalid texture type')
+      
+      
+      
+      
       flags.type = textureTypes[type]
     }
 
@@ -2945,33 +2091,32 @@ function createTextureSet (
     var c = flags.channels
     var hasChannels = false
     if ('shape' in options) {
-      check$1(Array.isArray(options.shape) && options.shape.length >= 2,
-        'shape must be an array')
+      
       w = options.shape[0]
       h = options.shape[1]
       if (options.shape.length === 3) {
         c = options.shape[2]
-        check$1(c > 0 && c <= 4, 'invalid number of channels')
+        
         hasChannels = true
       }
-      check$1(w >= 0 && w <= limits.maxTextureSize, 'invalid width')
-      check$1(h >= 0 && h <= limits.maxTextureSize, 'invalid height')
+      
+      
     } else {
       if ('radius' in options) {
         w = h = options.radius
-        check$1(w >= 0 && w <= limits.maxTextureSize, 'invalid radius')
+        
       }
       if ('width' in options) {
         w = options.width
-        check$1(w >= 0 && w <= limits.maxTextureSize, 'invalid width')
+        
       }
       if ('height' in options) {
         h = options.height
-        check$1(h >= 0 && h <= limits.maxTextureSize, 'invalid height')
+        
       }
       if ('channels' in options) {
         c = options.channels
-        check$1(c > 0 && c <= 4, 'invalid number of channels')
+        
         hasChannels = true
       }
     }
@@ -2982,11 +2127,8 @@ function createTextureSet (
     var hasFormat = false
     if ('format' in options) {
       var formatStr = options.format
-      check$1(extensions.webgl_depth_texture ||
-        !(formatStr === 'depth' || formatStr === 'depth stencil'),
-      'you must enable the WEBGL_depth_texture extension in order to use depth/stencil textures.')
-      check$1.parameter(formatStr, textureFormats,
-        'invalid texture format')
+      
+      
       var internalformat = flags.internalformat = textureFormats[formatStr]
       flags.format = colorFormats[internalformat]
       if (formatStr in textureTypes) {
@@ -3008,9 +2150,7 @@ function createTextureSet (
         flags.format = flags.internalformat = CHANNELS_FORMAT[flags.channels]
       }
     } else if (hasFormat && hasChannels) {
-      check$1(
-        flags.channels === FORMAT_CHANNELS[flags.format],
-        'number of channels inconsistent with specified format')
+      
     }
   }
 
@@ -3046,7 +2186,7 @@ function createTextureSet (
     if (isPixelData(options)) {
       data = options
     } else if (options) {
-      check$1.type(options, 'object', 'invalid pixel data type')
+      
       parseFlags(image, options)
       if ('x' in options) {
         image.xOffset = options.x | 0
@@ -3059,23 +2199,16 @@ function createTextureSet (
       }
     }
 
-    check$1(
-      !image.compressed ||
-      data instanceof Uint8Array,
-      'compressed texture data must be stored in a uint8array')
+    
 
     if (options.copy) {
-      check$1(!data, 'can not specify copy and data field for the same texture')
+      
       var viewW = contextState.viewportWidth
       var viewH = contextState.viewportHeight
       image.width = image.width || (viewW - image.xOffset)
       image.height = image.height || (viewH - image.yOffset)
       image.needsCopy = true
-      check$1(image.xOffset >= 0 && image.xOffset < viewW &&
-            image.yOffset >= 0 && image.yOffset < viewH &&
-            image.width > 0 && image.width <= viewW &&
-            image.height > 0 && image.height <= viewH,
-      'copy texture read out of bounds')
+      
     } else if (!data) {
       image.width = image.width || 1
       image.height = image.height || 1
@@ -3083,7 +2216,7 @@ function createTextureSet (
     } else if (isTypedArray(data)) {
       image.channels = image.channels || 4
       image.data = data
-      if (!('type' in options) && image.type === GL_UNSIGNED_BYTE$5) {
+      if (!('type' in options) && image.type === GL_UNSIGNED_BYTE$4) {
         image.type = typedArrayCode$1(data)
       }
     } else if (isNumericArray(data)) {
@@ -3093,7 +2226,7 @@ function createTextureSet (
       image.needsFree = true
     } else if (isNDArrayLike(data)) {
       var array = data.data
-      if (!Array.isArray(array) && image.type === GL_UNSIGNED_BYTE$5) {
+      if (!Array.isArray(array) && image.type === GL_UNSIGNED_BYTE$4) {
         image.type = typedArrayCode$1(array)
       }
       var shape = data.shape
@@ -3103,7 +2236,7 @@ function createTextureSet (
         shapeC = shape[2]
         strideC = stride[2]
       } else {
-        check$1(shape.length === 2, 'invalid ndarray pixel data, must be 2 or 3D')
+        
         shapeC = 1
         strideC = 1
       }
@@ -3167,12 +2300,10 @@ function createTextureSet (
       image.needsFree = true
     }
 
-    if (image.type === GL_FLOAT$4) {
-      check$1(limits.extensions.indexOf('oes_texture_float') >= 0,
-        'oes_texture_float extension not enabled')
-    } else if (image.type === GL_HALF_FLOAT_OES$1) {
-      check$1(limits.extensions.indexOf('oes_texture_half_float') >= 0,
-        'oes_texture_half_float extension not enabled')
+    if (image.type === GL_FLOAT$3) {
+      
+    } else if (image.type === GL_HALF_FLOAT_OES) {
+      
     }
 
     // do compressed texture  validation here.
@@ -3187,13 +2318,10 @@ function createTextureSet (
     var width = info.width
     var height = info.height
 
-    internalformat = gl2.getInternalFormat(gl, format, type)
-    type = gl2.getTextureType(gl, type)
-
     setFlags(info)
 
     if (element) {
-      gl.texImage2D(target, miplevel, internalformat, format, type, element)
+      gl.texImage2D(target, miplevel, format, format, type, element)
     } else if (info.compressed) {
       gl.compressedTexImage2D(target, miplevel, internalformat, width, height, 0, data)
     } else if (info.needsCopy) {
@@ -3201,7 +2329,7 @@ function createTextureSet (
       gl.copyTexImage2D(
         target, miplevel, format, info.xOffset, info.yOffset, width, height, 0)
     } else {
-      gl.texImage2D(target, miplevel, internalformat, width, height, 0, format, type, data || null)
+      gl.texImage2D(target, miplevel, format, width, height, 0, format, type, data || null)
     }
   }
 
@@ -3313,8 +2441,7 @@ function createTextureSet (
         mipmap.internalformat === GL_COMPRESSED_RGBA_S3TC_DXT5_EXT
       )
     ) {
-      check$1(mipmap.width % 4 === 0 && mipmap.height % 4 === 0,
-        'for compressed texture formats, mipmap level 0 must have width and height that are a multiple of 4')
+      
     }
   }
 
@@ -3355,11 +2482,11 @@ function createTextureSet (
   // Tex info
   // -------------------------------------------------------
   function TexInfo () {
-    this.minFilter = GL_NEAREST$1
-    this.magFilter = GL_NEAREST$1
+    this.minFilter = GL_NEAREST
+    this.magFilter = GL_NEAREST
 
-    this.wrapS = GL_CLAMP_TO_EDGE$1
-    this.wrapT = GL_CLAMP_TO_EDGE$1
+    this.wrapS = GL_CLAMP_TO_EDGE
+    this.wrapT = GL_CLAMP_TO_EDGE
 
     this.anisotropic = 1
 
@@ -3370,7 +2497,7 @@ function createTextureSet (
   function parseTexInfo (info, options) {
     if ('min' in options) {
       var minFilter = options.min
-      check$1.parameter(minFilter, minFilters)
+      
       info.minFilter = minFilters[minFilter]
       if (MIPMAP_FILTERS.indexOf(info.minFilter) >= 0 && !('faces' in options)) {
         info.genMipmaps = true
@@ -3379,7 +2506,7 @@ function createTextureSet (
 
     if ('mag' in options) {
       var magFilter = options.mag
-      check$1.parameter(magFilter, magFilters)
+      
       info.magFilter = magFilters[magFilter]
     }
 
@@ -3388,23 +2515,23 @@ function createTextureSet (
     if ('wrap' in options) {
       var wrap = options.wrap
       if (typeof wrap === 'string') {
-        check$1.parameter(wrap, wrapModes)
+        
         wrapS = wrapT = wrapModes[wrap]
       } else if (Array.isArray(wrap)) {
-        check$1.parameter(wrap[0], wrapModes)
-        check$1.parameter(wrap[1], wrapModes)
+        
+        
         wrapS = wrapModes[wrap[0]]
         wrapT = wrapModes[wrap[1]]
       }
     } else {
       if ('wrapS' in options) {
         var optWrapS = options.wrapS
-        check$1.parameter(optWrapS, wrapModes)
+        
         wrapS = wrapModes[optWrapS]
       }
       if ('wrapT' in options) {
         var optWrapT = options.wrapT
-        check$1.parameter(optWrapT, wrapModes)
+        
         wrapT = wrapModes[optWrapT]
       }
     }
@@ -3413,9 +2540,7 @@ function createTextureSet (
 
     if ('anisotropic' in options) {
       var anisotropic = options.anisotropic
-      check$1(typeof anisotropic === 'number' &&
-         anisotropic >= 1 && anisotropic <= limits.maxAnisotropic,
-      'aniso samples must be between 1 and ')
+      
       info.anisotropic = options.anisotropic
     }
 
@@ -3423,8 +2548,7 @@ function createTextureSet (
       var hasMipMap = false
       switch (typeof options.mipmap) {
         case 'string':
-          check$1.parameter(options.mipmap, mipmapHint,
-            'invalid mipmap hint')
+          
           info.mipmapHint = mipmapHint[options.mipmap]
           info.genMipmaps = true
           hasMipMap = true
@@ -3435,16 +2559,16 @@ function createTextureSet (
           break
 
         case 'object':
-          check$1(Array.isArray(options.mipmap), 'invalid mipmap type')
+          
           info.genMipmaps = false
           hasMipMap = true
           break
 
         default:
-          check$1.raise('invalid mipmap type')
+          
       }
       if (hasMipMap && !('min' in options)) {
-        info.minFilter = GL_NEAREST_MIPMAP_NEAREST$1
+        info.minFilter = GL_NEAREST_MIPMAP_NEAREST
       }
     }
   }
@@ -3511,7 +2635,7 @@ function createTextureSet (
 
   function destroy (texture) {
     var handle = texture.texture
-    check$1(handle, 'must not double destroy texture')
+    
     var unit = texture.unit
     var target = texture.target
     if (unit >= 0) {
@@ -3547,7 +2671,7 @@ function createTextureSet (
           break
         }
         if (unit >= numTexUnits) {
-          check$1.raise('insufficient number of texture units')
+          
         }
         if (config.profile && stats.maxTextureUnits < (unit + 1)) {
           stats.maxTextureUnits = unit + 1 // +1, since the units are zero-based
@@ -3587,7 +2711,7 @@ function createTextureSet (
           parseMipMapFromShape(mipData, a | 0, a | 0)
         }
       } else if (a) {
-        check$1.type(a, 'object', 'invalid arguments to regl.texture')
+        
         parseTexInfo(texInfo, a)
         parseMipMapFromObject(mipData, a)
       } else {
@@ -3602,7 +2726,7 @@ function createTextureSet (
 
       copyFlags(texture, mipData)
 
-      check$1.texture2D(texInfo, mipData, limits)
+      
       texture.internalformat = mipData.internalformat
 
       reglTexture2D.width = mipData.width
@@ -3637,7 +2761,7 @@ function createTextureSet (
     }
 
     function subimage (image, x_, y_, level_) {
-      check$1(!!image, 'must specify image data')
+      
 
       var x = x_ | 0
       var y = y_ | 0
@@ -3651,22 +2775,10 @@ function createTextureSet (
       imageData.width = imageData.width || ((texture.width >> level) - x)
       imageData.height = imageData.height || ((texture.height >> level) - y)
 
-      check$1(
-        texture.type === imageData.type &&
-        texture.format === imageData.format &&
-        texture.internalformat === imageData.internalformat,
-        'incompatible format for texture.subimage')
-      check$1(
-        x >= 0 && y >= 0 &&
-        x + imageData.width <= texture.width &&
-        y + imageData.height <= texture.height,
-        'texture.subimage write out of bounds')
-      check$1(
-        texture.mipmask & (1 << level),
-        'missing mipmap data')
-      check$1(
-        imageData.data || imageData.element || imageData.needsCopy,
-        'missing image data')
+      
+      
+      
+      
 
       tempBind(texture)
       setSubImage(imageData, GL_TEXTURE_2D$1, x, y, level)
@@ -3689,9 +2801,6 @@ function createTextureSet (
 
       tempBind(texture)
 
-      var internalformat = gl2.getInternalFormat(gl, texture.format, texture.type)
-      var type = gl2.getTextureType(gl, texture.type)
-
       for (var i = 0; texture.mipmask >> i; ++i) {
         var _w = w >> i
         var _h = h >> i
@@ -3699,12 +2808,12 @@ function createTextureSet (
         gl.texImage2D(
           GL_TEXTURE_2D$1,
           i,
-          internalformat,
+          texture.format,
           _w,
           _h,
           0,
           texture.format,
-          type,
+          texture.type,
           null)
       }
       tempRestore()
@@ -3772,11 +2881,9 @@ function createTextureSet (
           parseFlags(texture, a0)
           if ('faces' in a0) {
             var faceInput = a0.faces
-            check$1(Array.isArray(faceInput) && faceInput.length === 6,
-              'cube faces must be a length 6 array')
+            
             for (i = 0; i < 6; ++i) {
-              check$1(typeof faceInput[i] === 'object' && !!faceInput[i],
-                'invalid input for cube map face')
+              
               copyFlags(faces[i], texture)
               parseMipMapFromObject(faces[i], faceInput[i])
             }
@@ -3787,13 +2894,13 @@ function createTextureSet (
           }
         }
       } else {
-        check$1.raise('invalid arguments to cube map')
+        
       }
 
       copyFlags(texture, faces[0])
 
       if (!limits.npotTextureCube) {
-        check$1(isPow2$1(texture.width) && isPow2$1(texture.height), 'your browser does not support non power or two texture dimensions')
+        
       }
 
       if (texInfo.genMipmaps) {
@@ -3802,7 +2909,7 @@ function createTextureSet (
         texture.mipmask = faces[0].mipmask
       }
 
-      check$1.textureCube(texture, texInfo, faces, limits)
+      
       texture.internalformat = faces[0].internalformat
 
       reglTextureCube.width = faces[0].width
@@ -3842,9 +2949,8 @@ function createTextureSet (
     }
 
     function subimage (face, image, x_, y_, level_) {
-      check$1(!!image, 'must specify image data')
-      check$1(typeof face === 'number' && face === (face | 0) &&
-        face >= 0 && face < 6, 'invalid face')
+      
+      
 
       var x = x_ | 0
       var y = y_ | 0
@@ -3858,22 +2964,10 @@ function createTextureSet (
       imageData.width = imageData.width || ((texture.width >> level) - x)
       imageData.height = imageData.height || ((texture.height >> level) - y)
 
-      check$1(
-        texture.type === imageData.type &&
-        texture.format === imageData.format &&
-        texture.internalformat === imageData.internalformat,
-        'incompatible format for texture.subimage')
-      check$1(
-        x >= 0 && y >= 0 &&
-        x + imageData.width <= texture.width &&
-        y + imageData.height <= texture.height,
-        'texture.subimage write out of bounds')
-      check$1(
-        texture.mipmask & (1 << level),
-        'missing mipmap data')
-      check$1(
-        imageData.data || imageData.element || imageData.needsCopy,
-        'missing image data')
+      
+      
+      
+      
 
       tempBind(texture)
       setSubImage(imageData, GL_TEXTURE_CUBE_MAP_POSITIVE_X$1 + face, x, y, level)
@@ -3975,10 +3069,6 @@ function createTextureSet (
     values(textureSet).forEach(function (texture) {
       texture.texture = gl.createTexture()
       gl.bindTexture(texture.target, texture.texture)
-
-      var internalformat = gl2.getInternalFormat(gl, texture.format, texture.type)
-      var type = gl2.getTextureType(gl, texture.type)
-
       for (var i = 0; i < 32; ++i) {
         if ((texture.mipmask & (1 << i)) === 0) {
           continue
@@ -3986,23 +3076,23 @@ function createTextureSet (
         if (texture.target === GL_TEXTURE_2D$1) {
           gl.texImage2D(GL_TEXTURE_2D$1,
             i,
-            internalformat,
+            texture.internalformat,
             texture.width >> i,
             texture.height >> i,
             0,
-            texture.format,
-            type,
+            texture.internalformat,
+            texture.type,
             null)
         } else {
           for (var j = 0; j < 6; ++j) {
             gl.texImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X$1 + j,
               i,
-              internalformat,
+              texture.internalformat,
               texture.width >> i,
               texture.height >> i,
               0,
-              texture.format,
-              type,
+              texture.internalformat,
+              texture.type,
               null)
           }
         }
@@ -4029,7 +3119,7 @@ var GL_RGB5_A1$1 = 0x8057
 var GL_RGB565$1 = 0x8D62
 var GL_DEPTH_COMPONENT16 = 0x81A5
 var GL_STENCIL_INDEX8 = 0x8D48
-var GL_DEPTH_STENCIL$2 = 0x84F9
+var GL_DEPTH_STENCIL$1 = 0x84F9
 
 var GL_SRGB8_ALPHA8_EXT = 0x8C43
 
@@ -4046,7 +3136,7 @@ FORMAT_SIZES[GL_RGB565$1] = 2
 
 FORMAT_SIZES[GL_DEPTH_COMPONENT16] = 2
 FORMAT_SIZES[GL_STENCIL_INDEX8] = 1
-FORMAT_SIZES[GL_DEPTH_STENCIL$2] = 4
+FORMAT_SIZES[GL_DEPTH_STENCIL$1] = 4
 
 FORMAT_SIZES[GL_SRGB8_ALPHA8_EXT] = 4
 FORMAT_SIZES[GL_RGBA32F_EXT] = 16
@@ -4064,7 +3154,7 @@ var wrapRenderbuffers = function (gl, extensions, limits, stats, config) {
     'rgb5 a1': GL_RGB5_A1$1,
     'depth': GL_DEPTH_COMPONENT16,
     'stencil': GL_STENCIL_INDEX8,
-    'depth stencil': GL_DEPTH_STENCIL$2
+    'depth stencil': GL_DEPTH_STENCIL$1
   }
 
   if (extensions.ext_srgb) {
@@ -4112,7 +3202,7 @@ var wrapRenderbuffers = function (gl, extensions, limits, stats, config) {
 
   function destroy (rb) {
     var handle = rb.renderbuffer
-    check$1(handle, 'must not double destroy renderbuffer')
+    
     gl.bindRenderbuffer(GL_RENDERBUFFER, null)
     gl.deleteRenderbuffer(handle)
     rb.renderbuffer = null
@@ -4135,8 +3225,7 @@ var wrapRenderbuffers = function (gl, extensions, limits, stats, config) {
         var options = a
         if ('shape' in options) {
           var shape = options.shape
-          check$1(Array.isArray(shape) && shape.length >= 2,
-            'invalid renderbuffer shape')
+          
           w = shape[0] | 0
           h = shape[1] | 0
         } else {
@@ -4151,8 +3240,7 @@ var wrapRenderbuffers = function (gl, extensions, limits, stats, config) {
           }
         }
         if ('format' in options) {
-          check$1.parameter(options.format, formatTypes,
-            'invalid renderbuffer format')
+          
           format = formatTypes[options.format]
         }
       } else if (typeof a === 'number') {
@@ -4165,14 +3253,11 @@ var wrapRenderbuffers = function (gl, extensions, limits, stats, config) {
       } else if (!a) {
         w = h = 1
       } else {
-        check$1.raise('invalid arguments to renderbuffer constructor')
+        
       }
 
       // check shape
-      check$1(
-        w > 0 && h > 0 &&
-        w <= limits.maxRenderbufferSize && h <= limits.maxRenderbufferSize,
-        'invalid renderbuffer size')
+      
 
       if (w === renderbuffer.width &&
           h === renderbuffer.height &&
@@ -4186,6 +3271,8 @@ var wrapRenderbuffers = function (gl, extensions, limits, stats, config) {
 
       gl.bindRenderbuffer(GL_RENDERBUFFER, renderbuffer.renderbuffer)
       gl.renderbufferStorage(GL_RENDERBUFFER, format, w, h)
+
+      
 
       if (config.profile) {
         renderbuffer.stats.size = getRenderbufferSize(renderbuffer.format, renderbuffer.width, renderbuffer.height)
@@ -4204,10 +3291,7 @@ var wrapRenderbuffers = function (gl, extensions, limits, stats, config) {
       }
 
       // check shape
-      check$1(
-        w > 0 && h > 0 &&
-        w <= limits.maxRenderbufferSize && h <= limits.maxRenderbufferSize,
-        'invalid renderbuffer size')
+      
 
       reglRenderbuffer.width = renderbuffer.width = w
       reglRenderbuffer.height = renderbuffer.height = h
@@ -4215,9 +3299,7 @@ var wrapRenderbuffers = function (gl, extensions, limits, stats, config) {
       gl.bindRenderbuffer(GL_RENDERBUFFER, renderbuffer.renderbuffer)
       gl.renderbufferStorage(GL_RENDERBUFFER, renderbuffer.format, w, h)
 
-      check$1(
-        gl.getError() === 0,
-        'invalid render buffer format')
+      
 
       // also, recompute size.
       if (config.profile) {
@@ -4284,24 +3366,12 @@ var GL_STENCIL_ATTACHMENT = 0x8D20
 var GL_DEPTH_STENCIL_ATTACHMENT = 0x821A
 
 var GL_FRAMEBUFFER_COMPLETE$1 = 0x8CD5
-var GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT = 0x8CD6
-var GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT = 0x8CD7
-var GL_FRAMEBUFFER_INCOMPLETE_DIMENSIONS = 0x8CD9
-var GL_FRAMEBUFFER_UNSUPPORTED = 0x8CDD
-
-var GL_HALF_FLOAT_OES$2 = 0x8D61
-var GL_UNSIGNED_BYTE$6 = 0x1401
-var GL_FLOAT$5 = 0x1406
+var GL_HALF_FLOAT_OES$1 = 0x8D61
+var GL_UNSIGNED_BYTE$5 = 0x1401
+var GL_FLOAT$4 = 0x1406
 
 var GL_RGB$1 = 0x1907
 var GL_RGBA$2 = 0x1908
-
-var GL_DEPTH_COMPONENT$2 = 0x1902
-
-var colorTextureFormatEnums = [
-  GL_RGB$1,
-  GL_RGBA$2
-]
 
 // for every texture format, store
 // the number of channels
@@ -4312,40 +3382,9 @@ textureFormatChannels[GL_RGB$1] = 3
 // for every texture type, store
 // the size in bytes.
 var textureTypeSizes = []
-textureTypeSizes[GL_UNSIGNED_BYTE$6] = 1
-textureTypeSizes[GL_FLOAT$5] = 4
-textureTypeSizes[GL_HALF_FLOAT_OES$2] = 2
-
-var GL_RGBA4$2 = 0x8056
-var GL_RGB5_A1$2 = 0x8057
-var GL_RGB565$2 = 0x8D62
-var GL_DEPTH_COMPONENT16$1 = 0x81A5
-var GL_STENCIL_INDEX8$1 = 0x8D48
-var GL_DEPTH_STENCIL$3 = 0x84F9
-
-var GL_SRGB8_ALPHA8_EXT$1 = 0x8C43
-
-var GL_RGBA32F_EXT$1 = 0x8814
-
-var GL_RGBA16F_EXT$1 = 0x881A
-var GL_RGB16F_EXT$1 = 0x881B
-
-var colorRenderbufferFormatEnums = [
-  GL_RGBA4$2,
-  GL_RGB5_A1$2,
-  GL_RGB565$2,
-  GL_SRGB8_ALPHA8_EXT$1,
-  GL_RGBA16F_EXT$1,
-  GL_RGB16F_EXT$1,
-  GL_RGBA32F_EXT$1
-]
-
-var statusCode = {}
-statusCode[GL_FRAMEBUFFER_COMPLETE$1] = 'complete'
-statusCode[GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT] = 'incomplete attachment'
-statusCode[GL_FRAMEBUFFER_INCOMPLETE_DIMENSIONS] = 'incomplete dimensions'
-statusCode[GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT] = 'incomplete, missing attachment'
-statusCode[GL_FRAMEBUFFER_UNSUPPORTED] = 'unsupported'
+textureTypeSizes[GL_UNSIGNED_BYTE$5] = 1
+textureTypeSizes[GL_FLOAT$4] = 4
+textureTypeSizes[GL_HALF_FLOAT_OES$1] = 2
 
 function wrapFBOState (
   gl,
@@ -4421,14 +3460,11 @@ function wrapFBOState (
       var texture = attachment.texture._texture
       var tw = Math.max(1, texture.width)
       var th = Math.max(1, texture.height)
-      check$1(tw === width && th === height,
-        'inconsistent width/height for supplied texture')
+      
       texture.refCount += 1
     } else {
       var renderbuffer = attachment.renderbuffer._renderbuffer
-      check$1(
-        renderbuffer.width === width && renderbuffer.height === height,
-        'inconsistent width/height for renderbuffer')
+      
       renderbuffer.refCount += 1
     }
   }
@@ -4465,23 +3501,20 @@ function wrapFBOState (
       }
     }
 
-    check$1.type(data, 'function', 'invalid attachment data')
+    
 
     var type = data._reglType
     if (type === 'texture2d') {
       texture = data
-      check$1(target === GL_TEXTURE_2D$2)
+      
     } else if (type === 'textureCube') {
       texture = data
-      check$1(
-        target >= GL_TEXTURE_CUBE_MAP_POSITIVE_X$2 &&
-        target < GL_TEXTURE_CUBE_MAP_POSITIVE_X$2 + 6,
-        'invalid cube map target')
+      
     } else if (type === 'renderbuffer') {
       renderbuffer = data
       target = GL_RENDERBUFFER$1
     } else {
-      check$1.raise('invalid regl object for attachment')
+      
     }
 
     return new FramebufferAttachment(target, texture, renderbuffer)
@@ -4555,7 +3588,7 @@ function wrapFBOState (
 
   function destroy (framebuffer) {
     var handle = framebuffer.framebuffer
-    check$1(handle, 'must not double destroy framebuffer')
+    
     gl.deleteFramebuffer(handle)
     framebuffer.framebuffer = null
     stats.framebufferCount--
@@ -4605,8 +3638,7 @@ function wrapFBOState (
     // Check status code
     var status = gl.checkFramebufferStatus(GL_FRAMEBUFFER$1)
     if (!gl.isContextLost() && status !== GL_FRAMEBUFFER_COMPLETE$1) {
-      check$1.raise('framebuffer configuration not supported, status = ' +
-        statusCode[status])
+      
     }
 
     gl.bindFramebuffer(GL_FRAMEBUFFER$1, framebufferState.next ? framebufferState.next.framebuffer : null)
@@ -4624,8 +3656,7 @@ function wrapFBOState (
     function reglFramebuffer (a, b) {
       var i
 
-      check$1(framebufferState.next !== framebuffer,
-        'can not update framebuffer which is currently in use')
+      
 
       var width = 0
       var height = 0
@@ -4650,13 +3681,12 @@ function wrapFBOState (
       } else if (!a) {
         width = height = 1
       } else {
-        check$1.type(a, 'object', 'invalid arguments for framebuffer')
+        
         var options = a
 
         if ('shape' in options) {
           var shape = options.shape
-          check$1(Array.isArray(shape) && shape.length >= 2,
-            'invalid shape for framebuffer')
+          
           width = shape[0]
           height = shape[1]
         } else {
@@ -4677,16 +3707,14 @@ function wrapFBOState (
             options.color ||
             options.colors
           if (Array.isArray(colorBuffer)) {
-            check$1(
-              colorBuffer.length === 1 || extensions.webgl_draw_buffers,
-              'multiple render targets not supported')
+            
           }
         }
 
         if (!colorBuffer) {
           if ('colorCount' in options) {
             colorCount = options.colorCount | 0
-            check$1(colorCount > 0, 'invalid color buffer count')
+            
           }
 
           if ('colorTexture' in options) {
@@ -4698,23 +3726,17 @@ function wrapFBOState (
             colorType = options.colorType
             if (!colorTexture) {
               if (colorType === 'half float' || colorType === 'float16') {
-                check$1(extensions.ext_color_buffer_half_float,
-                  'you must enable EXT_color_buffer_half_float to use 16-bit render buffers')
+                
                 colorFormat = 'rgba16f'
               } else if (colorType === 'float' || colorType === 'float32') {
-                check$1(extensions.webgl_color_buffer_float,
-                  'you must enable WEBGL_color_buffer_float in order to use 32-bit floating point renderbuffers')
+                
                 colorFormat = 'rgba32f'
               }
             } else {
-              check$1(extensions.oes_texture_float ||
-                !(colorType === 'float' || colorType === 'float32'),
-              'you must enable OES_texture_float in order to use floating point framebuffer objects')
-              check$1(extensions.oes_texture_half_float ||
-                !(colorType === 'half float' || colorType === 'float16'),
-              'you must enable OES_texture_half_float in order to use 16-bit floating point framebuffer objects')
+              
+              
             }
-            check$1.oneOf(colorType, colorTypes, 'invalid color type')
+            
           }
 
           if ('colorFormat' in options) {
@@ -4725,13 +3747,9 @@ function wrapFBOState (
               colorTexture = false
             } else {
               if (colorTexture) {
-                check$1.oneOf(
-                  options.colorFormat, colorTextureFormats,
-                  'invalid color format for texture')
+                
               } else {
-                check$1.oneOf(
-                  options.colorFormat, colorRenderbufferFormats,
-                  'invalid color format for renderbuffer')
+                
               }
             }
           }
@@ -4740,8 +3758,7 @@ function wrapFBOState (
         if ('depthTexture' in options || 'depthStencilTexture' in options) {
           depthStencilTexture = !!(options.depthTexture ||
             options.depthStencilTexture)
-          check$1(!depthStencilTexture || extensions.webgl_depth_texture,
-            'webgl_depth_texture extension not supported')
+          
         }
 
         if ('depth' in options) {
@@ -4796,10 +3813,8 @@ function wrapFBOState (
         }
       }
 
-      check$1(extensions.webgl_draw_buffers || colorAttachments.length <= 1,
-        'you must enable the WEBGL_draw_buffers extension in order to use multiple color buffers.')
-      check$1(colorAttachments.length <= limits.maxColorAttachments,
-        'too many color attachments, not supported')
+      
+      
 
       width = width || colorAttachments[0].width
       height = height || colorAttachments[0].height
@@ -4837,20 +3852,13 @@ function wrapFBOState (
           'depth stencil')
       }
 
-      check$1(
-        (!!depthBuffer) + (!!stencilBuffer) + (!!depthStencilBuffer) <= 1,
-        'invalid framebuffer configuration, can specify exactly one depth/stencil attachment')
+      
 
       var commonColorAttachmentSize = null
 
       for (i = 0; i < colorAttachments.length; ++i) {
         incRefAndCheckShape(colorAttachments[i], width, height)
-        check$1(!colorAttachments[i] ||
-          (colorAttachments[i].texture &&
-            colorTextureFormatEnums.indexOf(colorAttachments[i].texture._texture.format) >= 0) ||
-          (colorAttachments[i].renderbuffer &&
-            colorRenderbufferFormatEnums.indexOf(colorAttachments[i].renderbuffer._renderbuffer.format) >= 0),
-        'framebuffer color attachment ' + i + ' is invalid')
+        
 
         if (colorAttachments[i] && colorAttachments[i].texture) {
           var colorAttachmentSize =
@@ -4863,30 +3871,16 @@ function wrapFBOState (
             // We need to make sure that all color attachments have the same number of bitplanes
             // (that is, the same numer of bits per pixel)
             // This is required by the GLES2.0 standard. See the beginning of Chapter 4 in that document.
-            check$1(commonColorAttachmentSize === colorAttachmentSize,
-              'all color attachments much have the same number of bits per pixel.')
+            
           }
         }
       }
       incRefAndCheckShape(depthAttachment, width, height)
-      check$1(!depthAttachment ||
-        (depthAttachment.texture &&
-          depthAttachment.texture._texture.format === GL_DEPTH_COMPONENT$2) ||
-        (depthAttachment.renderbuffer &&
-          depthAttachment.renderbuffer._renderbuffer.format === GL_DEPTH_COMPONENT16$1),
-      'invalid depth attachment for framebuffer object')
+      
       incRefAndCheckShape(stencilAttachment, width, height)
-      check$1(!stencilAttachment ||
-        (stencilAttachment.renderbuffer &&
-          stencilAttachment.renderbuffer._renderbuffer.format === GL_STENCIL_INDEX8$1),
-      'invalid stencil attachment for framebuffer object')
+      
       incRefAndCheckShape(depthStencilAttachment, width, height)
-      check$1(!depthStencilAttachment ||
-        (depthStencilAttachment.texture &&
-          depthStencilAttachment.texture._texture.format === GL_DEPTH_STENCIL$3) ||
-        (depthStencilAttachment.renderbuffer &&
-          depthStencilAttachment.renderbuffer._renderbuffer.format === GL_DEPTH_STENCIL$3),
-      'invalid depth-stencil attachment for framebuffer object')
+      
 
       // decrement references
       decFBORefs(framebuffer)
@@ -4913,8 +3907,7 @@ function wrapFBOState (
     }
 
     function resize (w_, h_) {
-      check$1(framebufferState.next !== framebuffer,
-        'can not resize a framebuffer which is currently in use')
+      
 
       var w = Math.max(w_ | 0, 1)
       var h = Math.max((h_ | 0) || w, 1)
@@ -4963,8 +3956,7 @@ function wrapFBOState (
     function reglFramebufferCube (a) {
       var i
 
-      check$1(faces.indexOf(framebufferState.next) < 0,
-        'can not update framebuffer which is currently in use')
+      
 
       var params = {
         color: null
@@ -4982,17 +3974,13 @@ function wrapFBOState (
       } else if (!a) {
         radius = 1
       } else {
-        check$1.type(a, 'object', 'invalid arguments for framebuffer')
+        
         var options = a
 
         if ('shape' in options) {
           var shape = options.shape
-          check$1(
-            Array.isArray(shape) && shape.length >= 2,
-            'invalid shape for framebuffer')
-          check$1(
-            shape[0] === shape[1],
-            'cube framebuffer must be square')
+          
+          
           radius = shape[0]
         } else {
           if ('radius' in options) {
@@ -5001,7 +3989,7 @@ function wrapFBOState (
           if ('width' in options) {
             radius = options.width | 0
             if ('height' in options) {
-              check$1(options.height === radius, 'must be square')
+              
             }
           } else if ('height' in options) {
             radius = options.height | 0
@@ -5014,30 +4002,24 @@ function wrapFBOState (
             options.color ||
             options.colors
           if (Array.isArray(colorBuffer)) {
-            check$1(
-              colorBuffer.length === 1 || extensions.webgl_draw_buffers,
-              'multiple render targets not supported')
+            
           }
         }
 
         if (!colorBuffer) {
           if ('colorCount' in options) {
             colorCount = options.colorCount | 0
-            check$1(colorCount > 0, 'invalid color buffer count')
+            
           }
 
           if ('colorType' in options) {
-            check$1.oneOf(
-              options.colorType, colorTypes,
-              'invalid color type')
+            
             colorType = options.colorType
           }
 
           if ('colorFormat' in options) {
             colorFormat = options.colorFormat
-            check$1.oneOf(
-              options.colorFormat, colorTextureFormats,
-              'invalid color format for texture')
+            
           }
         }
 
@@ -5080,13 +4062,9 @@ function wrapFBOState (
       params.color = Array(colorCubes.length)
       for (i = 0; i < colorCubes.length; ++i) {
         var cube = colorCubes[i]
-        check$1(
-          typeof cube === 'function' && cube._reglType === 'textureCube',
-          'invalid cube map')
+        
         radius = radius || cube.width
-        check$1(
-          cube.width === radius && cube.height === radius,
-          'invalid cube map shape')
+        
         params.color[i] = {
           target: GL_TEXTURE_CUBE_MAP_POSITIVE_X$2,
           data: colorCubes[i]
@@ -5120,8 +4098,7 @@ function wrapFBOState (
     function resize (radius_) {
       var i
       var radius = radius_ | 0
-      check$1(radius > 0 && radius <= limits.maxCubeMapSize,
-        'invalid radius for cube fbo')
+      
 
       if (radius === reglFramebufferCube.width) {
         return reglFramebufferCube
@@ -5184,7 +4161,7 @@ function wrapFBOState (
   })
 }
 
-var GL_FLOAT$6 = 5126
+var GL_FLOAT$5 = 5126
 var GL_ARRAY_BUFFER$1 = 34962
 
 function AttributeRecord () {
@@ -5198,7 +4175,7 @@ function AttributeRecord () {
   this.buffer = null
   this.size = 0
   this.normalized = false
-  this.type = GL_FLOAT$6
+  this.type = GL_FLOAT$5
   this.offset = 0
   this.stride = 0
   this.divisor = 0
@@ -5375,9 +4352,9 @@ function wrapAttributeState (
     stats.vaoCount += 1
 
     function updateVAO (attributes) {
-      check$1(Array.isArray(attributes), 'arguments to vertex array constructor must be an array')
-      check$1(attributes.length < NUM_ATTRIBUTES, 'too many attributes')
-      check$1(attributes.length > 0, 'must specify at least one attribute')
+      
+      
+      
 
       for (var j = 0; j < vao.buffers.length; ++j) {
         vao.buffers[j].destroy()
@@ -5414,7 +4391,7 @@ function wrapAttributeState (
           rec.size = ((+spec.size) || rec.buffer.dimension) | 0
           rec.normalized = !!spec.normalized || false
           if ('type' in spec) {
-            check$1.parameter(spec.type, glTypes, 'invalid buffer type')
+            
             rec.type = glTypes[spec.type]
           } else {
             rec.type = rec.buffer.dtype
@@ -5424,20 +4401,20 @@ function wrapAttributeState (
           rec.divisor = (spec.divisor || 0) | 0
           rec.state = 1
 
-          check$1(rec.size >= 1 && rec.size <= 4, 'size must be between 1 and 4')
-          check$1(rec.offset >= 0, 'invalid offset')
-          check$1(rec.stride >= 0 && rec.stride <= 255, 'stride must be between 0 and 255')
-          check$1(rec.divisor >= 0, 'divisor must be positive')
-          check$1(!rec.divisor || !!extensions.angle_instanced_arrays, 'ANGLE_instanced_arrays must be enabled to use divisor')
+          
+          
+          
+          
+          
         } else if ('x' in spec) {
-          check$1(i > 0, 'first attribute must not be a constant')
+          
           rec.x = +spec.x || 0
           rec.y = +spec.y || 0
           rec.z = +spec.z || 0
           rec.w = +spec.w || 0
           rec.state = 2
         } else {
-          check$1(false, 'invalid attribute spec for location ' + i)
+          
         }
       }
 
@@ -5497,7 +4474,7 @@ function wrapShaderState (gl, stringStore, stats, config) {
       shader = gl.createShader(type)
       gl.shaderSource(shader, source)
       gl.compileShader(shader)
-      check$1.shaderError(gl, shader, source, type, command)
+      
       cache[id] = shader
     }
 
@@ -5519,7 +4496,6 @@ function wrapShaderState (gl, stringStore, stats, config) {
     this.program = null
     this.uniforms = []
     this.attributes = []
-    this.refCount = 1
 
     if (config.profile) {
       this.stats = {
@@ -5549,12 +4525,7 @@ function wrapShaderState (gl, stringStore, stats, config) {
     }
 
     gl.linkProgram(program)
-    check$1.linkError(
-      gl,
-      program,
-      stringStore.str(desc.fragId),
-      stringStore.str(desc.vertId),
-      command)
+    
 
     // -------------------------------
     // grab uniforms
@@ -5657,19 +4628,16 @@ function wrapShaderState (gl, stringStore, stats, config) {
     },
 
     program: function (vertId, fragId, command, attribLocations) {
-      check$1.command(vertId >= 0, 'missing vertex shader', command)
-      check$1.command(fragId >= 0, 'missing fragment shader', command)
+      
+      
 
       var cache = programCache[fragId]
       if (!cache) {
         cache = programCache[fragId] = {}
       }
       var prevProgram = cache[vertId]
-      if (prevProgram) {
-        prevProgram.refCount++
-        if (!attribLocations) {
-          return prevProgram
-        }
+      if (prevProgram && !attribLocations) {
+        return prevProgram
       }
       var program = new REGLProgram(fragId, vertId)
       stats.shaderCount++
@@ -5678,29 +4646,7 @@ function wrapShaderState (gl, stringStore, stats, config) {
         cache[vertId] = program
       }
       programList.push(program)
-      return extend(program, {
-        destroy: function () {
-          program.refCount--
-          if (program.refCount <= 0) {
-            gl.deleteProgram(program.program)
-            var idx = programList.indexOf(program)
-            programList.splice(idx, 1)
-            stats.shaderCount--
-          }
-          // no program is linked to this vert anymore
-          if (cache[program.vertId].refCount <= 0) {
-            gl.deleteShader(vertShaders[program.vertId])
-            delete vertShaders[program.vertId]
-            delete programCache[program.fragId][program.vertId]
-          }
-          // no program is linked to this frag anymore
-          if (!Object.keys(programCache[program.fragId]).length) {
-            gl.deleteShader(fragShaders[program.fragId])
-            delete fragShaders[program.fragId]
-            delete programCache[program.fragId]
-          }
-        }
-      })
+      return program
     },
 
     restore: restoreShaders,
@@ -5713,9 +4659,9 @@ function wrapShaderState (gl, stringStore, stats, config) {
 }
 
 var GL_RGBA$3 = 6408
-var GL_UNSIGNED_BYTE$7 = 5121
+var GL_UNSIGNED_BYTE$6 = 5121
 var GL_PACK_ALIGNMENT = 0x0D05
-var GL_FLOAT$7 = 0x1406 // 5126
+var GL_FLOAT$6 = 0x1406 // 5126
 
 function wrapReadPixels (
   gl,
@@ -5728,28 +4674,20 @@ function wrapReadPixels (
   function readPixelsImpl (input) {
     var type
     if (framebufferState.next === null) {
-      check$1(
-        glAttributes.preserveDrawingBuffer,
-        'you must create a webgl context with "preserveDrawingBuffer":true in order to read pixels from the drawing buffer')
-      type = GL_UNSIGNED_BYTE$7
+      
+      type = GL_UNSIGNED_BYTE$6
     } else {
-      check$1(
-        framebufferState.next.colorAttachments[0].texture !== null,
-        'You cannot read from a renderbuffer')
+      
       type = framebufferState.next.colorAttachments[0].texture._texture.type
 
       if (extensions.oes_texture_float) {
-        check$1(
-          type === GL_UNSIGNED_BYTE$7 || type === GL_FLOAT$7,
-          'Reading from a framebuffer is only allowed for the types \'uint8\' and \'float\'')
+        
 
-        if (type === GL_FLOAT$7) {
-          check$1(limits.readFloat, 'Reading \'float\' values is not permitted in your browser. For a fallback, please see: https://www.npmjs.com/package/glsl-read-float')
+        if (type === GL_FLOAT$6) {
+          
         }
       } else {
-        check$1(
-          type === GL_UNSIGNED_BYTE$7,
-          'Reading from a framebuffer is only allowed for the type \'uint8\'')
+        
       }
     }
 
@@ -5762,15 +4700,11 @@ function wrapReadPixels (
     if (isTypedArray(input)) {
       data = input
     } else if (input) {
-      check$1.type(input, 'object', 'invalid arguments to regl.read()')
+      
       x = input.x | 0
       y = input.y | 0
-      check$1(
-        x >= 0 && x < context.framebufferWidth,
-        'invalid x offset for regl.read')
-      check$1(
-        y >= 0 && y < context.framebufferHeight,
-        'invalid y offset for regl.read')
+      
+      
       width = (input.width || (context.framebufferWidth - x)) | 0
       height = (input.height || (context.framebufferHeight - y)) | 0
       data = input.data || null
@@ -5778,23 +4712,15 @@ function wrapReadPixels (
 
     // sanity check input.data
     if (data) {
-      if (type === GL_UNSIGNED_BYTE$7) {
-        check$1(
-          data instanceof Uint8Array,
-          'buffer must be \'Uint8Array\' when reading from a framebuffer of type \'uint8\'')
-      } else if (type === GL_FLOAT$7) {
-        check$1(
-          data instanceof Float32Array,
-          'buffer must be \'Float32Array\' when reading from a framebuffer of type \'float\'')
+      if (type === GL_UNSIGNED_BYTE$6) {
+        
+      } else if (type === GL_FLOAT$6) {
+        
       }
     }
 
-    check$1(
-      width > 0 && width + x <= context.framebufferWidth,
-      'invalid width for read pixels')
-    check$1(
-      height > 0 && height + y <= context.framebufferHeight,
-      'invalid height for read pixels')
+    
+    
 
     // Update WebGL state
     reglPoll()
@@ -5804,16 +4730,16 @@ function wrapReadPixels (
 
     // Allocate data
     if (!data) {
-      if (type === GL_UNSIGNED_BYTE$7) {
+      if (type === GL_UNSIGNED_BYTE$6) {
         data = new Uint8Array(size)
-      } else if (type === GL_FLOAT$7) {
+      } else if (type === GL_FLOAT$6) {
         data = data || new Float32Array(size)
       }
     }
 
     // Type check
-    check$1.isTypedArray(data, 'data buffer for regl.read() must be a typedarray')
-    check$1(data.byteLength >= size, 'data buffer for regl.read() too small')
+    
+    
 
     // Run read pixels
     gl.pixelStorei(GL_PACK_ALIGNMENT, 4)
@@ -6029,7 +4955,7 @@ function createEnvironment () {
 // "cute" names for vector components
 var CUTE_COMPONENTS = 'xyzw'.split('')
 
-var GL_UNSIGNED_BYTE$8 = 5121
+var GL_UNSIGNED_BYTE$7 = 5121
 
 var ATTRIB_STATE_POINTER = 1
 var ATTRIB_STATE_CONSTANT = 2
@@ -6106,12 +5032,6 @@ var NESTED_OPTIONS = [
 var GL_ARRAY_BUFFER$2 = 34962
 var GL_ELEMENT_ARRAY_BUFFER$1 = 34963
 
-var GL_FRAGMENT_SHADER$1 = 35632
-var GL_VERTEX_SHADER$1 = 35633
-
-var GL_TEXTURE_2D$3 = 0x0DE1
-var GL_TEXTURE_CUBE_MAP$2 = 0x8513
-
 var GL_CULL_FACE = 0x0B44
 var GL_BLEND = 0x0BE2
 var GL_DITHER = 0x0BD0
@@ -6122,11 +5042,11 @@ var GL_POLYGON_OFFSET_FILL = 0x8037
 var GL_SAMPLE_ALPHA_TO_COVERAGE = 0x809E
 var GL_SAMPLE_COVERAGE = 0x80A0
 
-var GL_FLOAT$8 = 5126
+var GL_FLOAT$7 = 5126
 var GL_FLOAT_VEC2 = 35664
 var GL_FLOAT_VEC3 = 35665
 var GL_FLOAT_VEC4 = 35666
-var GL_INT$3 = 5124
+var GL_INT$2 = 5124
 var GL_INT_VEC2 = 35667
 var GL_INT_VEC3 = 35668
 var GL_INT_VEC4 = 35669
@@ -6178,20 +5098,6 @@ var blendFuncs = {
   'src alpha saturate': 776
 }
 
-// There are invalid values for srcRGB and dstRGB. See:
-// https://www.khronos.org/registry/webgl/specs/1.0/#6.13
-// https://github.com/KhronosGroup/WebGL/blob/0d3201f5f7ec3c0060bc1f04077461541f1987b9/conformance-suites/1.0.3/conformance/misc/webgl-specific.html#L56
-var invalidBlendCombinations = [
-  'constant color, constant alpha',
-  'one minus constant color, constant alpha',
-  'constant color, one minus constant alpha',
-  'one minus constant color, one minus constant alpha',
-  'constant alpha, constant color',
-  'constant alpha, one minus constant color',
-  'one minus constant alpha, constant color',
-  'one minus constant alpha, one minus constant color'
-]
-
 var compareFuncs = {
   'never': 512,
   'less': 513,
@@ -6222,11 +5128,6 @@ var stencilOps = {
   'increment wrap': 34055,
   'decrement wrap': 34056,
   'invert': 5386
-}
-
-var shaderType = {
-  'frag': GL_FRAGMENT_SHADER$1,
-  'vert': GL_VERTEX_SHADER$1
 }
 
 var orientationType = {
@@ -6454,9 +5355,7 @@ function reglCore (
     orientationType: orientationType
   }
 
-  check$1.optional(function () {
-    sharedState.isArrayLike = isArrayLike
-  })
+  
 
   if (extDrawBuffers) {
     sharedConstants.backBuffer = [GL_BACK]
@@ -6489,18 +5388,7 @@ function reglCore (
     })
 
     // Inject runtime assertion stuff for debug builds
-    check$1.optional(function () {
-      env.CHECK = link(check$1)
-      env.commandStr = check$1.guessCommand()
-      env.command = link(env.commandStr)
-      env.assert = function (block, pred, message) {
-        block(
-          'if(!(', pred, '))',
-          this.CHECK, '.commandRaise(', link(message), ',', this.command, ');')
-      }
-
-      sharedConstants.invalidBlendCombinations = invalidBlendCombinations
-    })
+    
 
     // Copy GL state variables over
     var nextVars = env.next = {}
@@ -6597,7 +5485,7 @@ function reglCore (
       var framebuffer = staticOptions[S_FRAMEBUFFER]
       if (framebuffer) {
         framebuffer = framebufferState.getFramebuffer(framebuffer)
-        check$1.command(framebuffer, 'invalid framebuffer object')
+        
         return createStaticDecl(function (env, block) {
           var FRAMEBUFFER = env.link(framebuffer)
           var shared = env.shared
@@ -6644,11 +5532,7 @@ function reglCore (
         var FRAMEBUFFER = scope.def(
           FRAMEBUFFER_STATE, '.getFramebuffer(', FRAMEBUFFER_FUNC, ')')
 
-        check$1.optional(function () {
-          env.assert(scope,
-            '!' + FRAMEBUFFER_FUNC + '||' + FRAMEBUFFER,
-            'invalid framebuffer object')
-        })
+        
 
         scope.set(
           FRAMEBUFFER_STATE,
@@ -6680,7 +5564,7 @@ function reglCore (
     function parseBox (param) {
       if (param in staticOptions) {
         var box = staticOptions[param]
-        check$1.commandType(box, 'object', 'invalid ' + param, env.commandStr)
+        
 
         var isStatic = true
         var x = box.x | 0
@@ -6688,13 +5572,13 @@ function reglCore (
         var w, h
         if ('width' in box) {
           w = box.width | 0
-          check$1.command(w >= 0, 'invalid ' + param, env.commandStr)
+          
         } else {
           isStatic = false
         }
         if ('height' in box) {
           h = box.height | 0
-          check$1.command(h >= 0, 'invalid ' + param, env.commandStr)
+          
         } else {
           isStatic = false
         }
@@ -6720,11 +5604,7 @@ function reglCore (
         var result = createDynamicDecl(dynBox, function (env, scope) {
           var BOX = env.invoke(scope, dynBox)
 
-          check$1.optional(function () {
-            env.assert(scope,
-              BOX + '&&typeof ' + BOX + '==="object"',
-              'invalid ' + param)
-          })
+          
 
           var CONTEXT = env.shared.context
           var BOX_X = scope.def(BOX, '.x|0')
@@ -6736,12 +5616,7 @@ function reglCore (
             '"height" in ', BOX, '?', BOX, '.height|0:',
             '(', CONTEXT, '.', S_FRAMEBUFFER_HEIGHT, '-', BOX_Y, ')')
 
-          check$1.optional(function () {
-            env.assert(scope,
-              BOX_W + '>=0&&' +
-              BOX_H + '>=0',
-              'invalid ' + param)
-          })
+          
 
           return [BOX_X, BOX_Y, BOX_W, BOX_H]
         })
@@ -6811,7 +5686,7 @@ function reglCore (
       if (sAttributes.length > 0 && typeof staticAttributes[sAttributes[0]] === 'number') {
         var bindings = []
         for (var i = 0; i < sAttributes.length; ++i) {
-          check$1(typeof staticAttributes[sAttributes[i]] === 'number', 'must specify all vertex attribute locations when using vaos')
+          
           bindings.push([staticAttributes[sAttributes[i]] | 0, sAttributes[i]])
         }
         return bindings
@@ -6827,9 +5702,7 @@ function reglCore (
     function parseShader (name) {
       if (name in staticOptions) {
         var id = stringStore.id(staticOptions[name])
-        check$1.optional(function () {
-          shaderState.shader(shaderType[name], id, check$1.guessCommand())
-        })
+        
         var result = createStaticDecl(function () {
           return id
         })
@@ -6840,13 +5713,7 @@ function reglCore (
         return createDynamicDecl(dyn, function (env, scope) {
           var str = env.invoke(scope, dyn)
           var id = scope.def(env.shared.strings, '.id(', str, ')')
-          check$1.optional(function () {
-            scope(
-              env.shared.shader, '.shader(',
-              shaderType[name], ',',
-              id, ',',
-              env.command, ');')
-          })
+          
           return id
         })
       }
@@ -6883,9 +5750,7 @@ function reglCore (
             vertId = scope.def(SHADER_STATE, '.', S_VERT)
           }
           var progDef = SHADER_STATE + '.program(' + vertId + ',' + fragId
-          check$1.optional(function () {
-            progDef += ',' + env.command
-          })
+          
           return scope.def(progDef + ')')
         })
     }
@@ -6909,7 +5774,7 @@ function reglCore (
           elements = elementState.getElements(elementState.create(elements, true))
         } else if (elements) {
           elements = elementState.getElements(elements)
-          check$1.command(elements, 'invalid elements', env.commandStr)
+          
         }
         var result = createStaticDecl(function (env, scope) {
           if (elements) {
@@ -6938,11 +5803,7 @@ function reglCore (
             .then(elements, '=', ELEMENT_STATE, '.createStream(', elementDefn, ');')
             .else(elements, '=', ELEMENT_STATE, '.getElements(', elementDefn, ');')
 
-          check$1.optional(function () {
-            env.assert(ifte.else,
-              '!' + elementDefn + '||' + elements,
-              'invalid elements')
-          })
+          
 
           scope.entry(ifte)
           scope.exit(
@@ -6963,7 +5824,7 @@ function reglCore (
     function parsePrimitive () {
       if (S_PRIMITIVE in staticOptions) {
         var primitive = staticOptions[S_PRIMITIVE]
-        check$1.commandParameter(primitive, primTypes, 'invalid primitve', env.commandStr)
+        
         return createStaticDecl(function (env, scope) {
           return primTypes[primitive]
         })
@@ -6972,11 +5833,7 @@ function reglCore (
         return createDynamicDecl(dynPrimitive, function (env, scope) {
           var PRIM_TYPES = env.constants.primTypes
           var prim = env.invoke(scope, dynPrimitive)
-          check$1.optional(function () {
-            env.assert(scope,
-              prim + ' in ' + PRIM_TYPES,
-              'invalid primitive, must be one of ' + Object.keys(primTypes))
-          })
+          
           return scope.def(PRIM_TYPES, '[', prim, ']')
         })
       } else if (elements) {
@@ -7007,7 +5864,7 @@ function reglCore (
     function parseParam (param, isOffset) {
       if (param in staticOptions) {
         var value = staticOptions[param] | 0
-        check$1.command(!isOffset || value >= 0, 'invalid ' + param, env.commandStr)
+        
         return createStaticDecl(function (env, scope) {
           if (isOffset) {
             env.OFFSET = value
@@ -7020,11 +5877,7 @@ function reglCore (
           var result = env.invoke(scope, dynValue)
           if (isOffset) {
             env.OFFSET = result
-            check$1.optional(function () {
-              env.assert(scope,
-                result + '>=0',
-                'invalid ' + param)
-            })
+            
           }
           return result
         })
@@ -7042,8 +5895,7 @@ function reglCore (
     function parseVertCount () {
       if (S_COUNT in staticOptions) {
         var count = staticOptions[S_COUNT] | 0
-        check$1.command(
-          typeof count === 'number' && count >= 0, 'invalid vertex count', env.commandStr)
+        
         return createStaticDecl(function () {
           return count
         })
@@ -7051,13 +5903,7 @@ function reglCore (
         var dynCount = dynamicOptions[S_COUNT]
         return createDynamicDecl(dynCount, function (env, scope) {
           var result = env.invoke(scope, dynCount)
-          check$1.optional(function () {
-            env.assert(scope,
-              'typeof ' + result + '==="number"&&' +
-              result + '>=0&&' +
-              result + '===(' + result + '|0)',
-              'invalid vertex count')
-          })
+          
           return result
         })
       } else if (elements) {
@@ -7072,11 +5918,7 @@ function reglCore (
                   var result = scope.def(
                     env.ELEMENTS, '.vertCount-', env.OFFSET)
 
-                  check$1.optional(function () {
-                    env.assert(scope,
-                      result + '>=0',
-                      'invalid vertex offset/element buffer too small')
-                  })
+                  
 
                   return result
                 })
@@ -7089,9 +5931,7 @@ function reglCore (
             var result = createStaticDecl(function () {
               return -1
             })
-            check$1.optional(function () {
-              result.MISSING = true
-            })
+            
             return result
           }
         } else {
@@ -7107,9 +5947,7 @@ function reglCore (
               }
               return scope.def(elements, '?', elements, '.vertCount:-1')
             })
-          check$1.optional(function () {
-            variable.DYNAMIC = true
-          })
+          
           return variable
         }
       }
@@ -7161,57 +5999,34 @@ function reglCore (
         case S_DEPTH_MASK:
           return parseParam(
             function (value) {
-              check$1.commandType(value, 'boolean', prop, env.commandStr)
+              
               return value
             },
             function (env, scope, value) {
-              check$1.optional(function () {
-                env.assert(scope,
-                  'typeof ' + value + '==="boolean"',
-                  'invalid flag ' + prop, env.commandStr)
-              })
+              
               return value
             })
 
         case S_DEPTH_FUNC:
           return parseParam(
             function (value) {
-              check$1.commandParameter(value, compareFuncs, 'invalid ' + prop, env.commandStr)
+              
               return compareFuncs[value]
             },
             function (env, scope, value) {
               var COMPARE_FUNCS = env.constants.compareFuncs
-              check$1.optional(function () {
-                env.assert(scope,
-                  value + ' in ' + COMPARE_FUNCS,
-                  'invalid ' + prop + ', must be one of ' + Object.keys(compareFuncs))
-              })
+              
               return scope.def(COMPARE_FUNCS, '[', value, ']')
             })
 
         case S_DEPTH_RANGE:
           return parseParam(
             function (value) {
-              check$1.command(
-                isArrayLike(value) &&
-                value.length === 2 &&
-                typeof value[0] === 'number' &&
-                typeof value[1] === 'number' &&
-                value[0] <= value[1],
-                'depth range is 2d array',
-                env.commandStr)
+              
               return value
             },
             function (env, scope, value) {
-              check$1.optional(function () {
-                env.assert(scope,
-                  env.shared.isArrayLike + '(' + value + ')&&' +
-                  value + '.length===2&&' +
-                  'typeof ' + value + '[0]==="number"&&' +
-                  'typeof ' + value + '[1]==="number"&&' +
-                  value + '[0]<=' + value + '[1]',
-                  'depth range must be a 2d array')
-              })
+              
 
               var Z_NEAR = scope.def('+', value, '[0]')
               var Z_FAR = scope.def('+', value, '[1]')
@@ -7221,19 +6036,17 @@ function reglCore (
         case S_BLEND_FUNC:
           return parseParam(
             function (value) {
-              check$1.commandType(value, 'object', 'blend.func', env.commandStr)
+              
               var srcRGB = ('srcRGB' in value ? value.srcRGB : value.src)
               var srcAlpha = ('srcAlpha' in value ? value.srcAlpha : value.src)
               var dstRGB = ('dstRGB' in value ? value.dstRGB : value.dst)
               var dstAlpha = ('dstAlpha' in value ? value.dstAlpha : value.dst)
-              check$1.commandParameter(srcRGB, blendFuncs, param + '.srcRGB', env.commandStr)
-              check$1.commandParameter(srcAlpha, blendFuncs, param + '.srcAlpha', env.commandStr)
-              check$1.commandParameter(dstRGB, blendFuncs, param + '.dstRGB', env.commandStr)
-              check$1.commandParameter(dstAlpha, blendFuncs, param + '.dstAlpha', env.commandStr)
+              
+              
+              
+              
 
-              check$1.command(
-                (invalidBlendCombinations.indexOf(srcRGB + ', ' + dstRGB) === -1),
-                'unallowed blending combination (srcRGB, dstRGB) = (' + srcRGB + ', ' + dstRGB + ')', env.commandStr)
+              
 
               return [
                 blendFuncs[srcRGB],
@@ -7245,11 +6058,7 @@ function reglCore (
             function (env, scope, value) {
               var BLEND_FUNCS = env.constants.blendFuncs
 
-              check$1.optional(function () {
-                env.assert(scope,
-                  value + '&&typeof ' + value + '==="object"',
-                  'invalid blend func, must be an object')
-              })
+              
 
               function read (prefix, suffix) {
                 var func = scope.def(
@@ -7257,11 +6066,7 @@ function reglCore (
                   '?', value, '.', prefix, suffix,
                   ':', value, '.', prefix)
 
-                check$1.optional(function () {
-                  env.assert(scope,
-                    func + ' in ' + BLEND_FUNCS,
-                    'invalid ' + prop + '.' + prefix + suffix + ', must be one of ' + Object.keys(blendFuncs))
-                })
+                
 
                 return func
               }
@@ -7269,15 +6074,7 @@ function reglCore (
               var srcRGB = read('src', 'RGB')
               var dstRGB = read('dst', 'RGB')
 
-              check$1.optional(function () {
-                var INVALID_BLEND_COMBINATIONS = env.constants.invalidBlendCombinations
-
-                env.assert(scope,
-                  INVALID_BLEND_COMBINATIONS +
-                           '.indexOf(' + srcRGB + '+", "+' + dstRGB + ') === -1 ',
-                  'unallowed blending combination for (srcRGB, dstRGB)'
-                )
-              })
+              
 
               var SRC_RGB = scope.def(BLEND_FUNCS, '[', srcRGB, ']')
               var SRC_ALPHA = scope.def(BLEND_FUNCS, '[', read('src', 'Alpha'), ']')
@@ -7291,22 +6088,20 @@ function reglCore (
           return parseParam(
             function (value) {
               if (typeof value === 'string') {
-                check$1.commandParameter(value, blendEquations, 'invalid ' + prop, env.commandStr)
+                
                 return [
                   blendEquations[value],
                   blendEquations[value]
                 ]
               } else if (typeof value === 'object') {
-                check$1.commandParameter(
-                  value.rgb, blendEquations, prop + '.rgb', env.commandStr)
-                check$1.commandParameter(
-                  value.alpha, blendEquations, prop + '.alpha', env.commandStr)
+                
+                
                 return [
                   blendEquations[value.rgb],
                   blendEquations[value.alpha]
                 ]
               } else {
-                check$1.commandRaise('invalid blend.equation', env.commandStr)
+                
               }
             },
             function (env, scope, value) {
@@ -7317,20 +6112,7 @@ function reglCore (
 
               var ifte = env.cond('typeof ', value, '==="string"')
 
-              check$1.optional(function () {
-                function checkProp (block, name, value) {
-                  env.assert(block,
-                    value + ' in ' + BLEND_EQUATIONS,
-                    'invalid ' + name + ', must be one of ' + Object.keys(blendEquations))
-                }
-                checkProp(ifte.then, prop, value)
-
-                env.assert(ifte.else,
-                  value + '&&typeof ' + value + '==="object"',
-                  'invalid ' + prop)
-                checkProp(ifte.else, prop + '.rgb', value + '.rgb')
-                checkProp(ifte.else, prop + '.alpha', value + '.alpha')
-              })
+              
 
               ifte.then(
                 RGB, '=', ALPHA, '=', BLEND_EQUATIONS, '[', value, '];')
@@ -7346,21 +6128,13 @@ function reglCore (
         case S_BLEND_COLOR:
           return parseParam(
             function (value) {
-              check$1.command(
-                isArrayLike(value) &&
-                value.length === 4,
-                'blend.color must be a 4d array', env.commandStr)
+              
               return loop(4, function (i) {
                 return +value[i]
               })
             },
             function (env, scope, value) {
-              check$1.optional(function () {
-                env.assert(scope,
-                  env.shared.isArrayLike + '(' + value + ')&&' +
-                  value + '.length===4',
-                  'blend.color must be a 4d array')
-              })
+              
               return loop(4, function (i) {
                 return scope.def('+', value, '[', i, ']')
               })
@@ -7369,28 +6143,24 @@ function reglCore (
         case S_STENCIL_MASK:
           return parseParam(
             function (value) {
-              check$1.commandType(value, 'number', param, env.commandStr)
+              
               return value | 0
             },
             function (env, scope, value) {
-              check$1.optional(function () {
-                env.assert(scope,
-                  'typeof ' + value + '==="number"',
-                  'invalid stencil.mask')
-              })
+              
               return scope.def(value, '|0')
             })
 
         case S_STENCIL_FUNC:
           return parseParam(
             function (value) {
-              check$1.commandType(value, 'object', param, env.commandStr)
+              
               var cmp = value.cmp || 'keep'
               var ref = value.ref || 0
               var mask = 'mask' in value ? value.mask : -1
-              check$1.commandParameter(cmp, compareFuncs, prop + '.cmp', env.commandStr)
-              check$1.commandType(ref, 'number', prop + '.ref', env.commandStr)
-              check$1.commandType(mask, 'number', prop + '.mask', env.commandStr)
+              
+              
+              
               return [
                 compareFuncs[cmp],
                 ref,
@@ -7399,16 +6169,7 @@ function reglCore (
             },
             function (env, scope, value) {
               var COMPARE_FUNCS = env.constants.compareFuncs
-              check$1.optional(function () {
-                function assert () {
-                  env.assert(scope,
-                    Array.prototype.join.call(arguments, ''),
-                    'invalid stencil.func')
-                }
-                assert(value + '&&typeof ', value, '==="object"')
-                assert('!("cmp" in ', value, ')||(',
-                  value, '.cmp in ', COMPARE_FUNCS, ')')
-              })
+              
               var cmp = scope.def(
                 '"cmp" in ', value,
                 '?', COMPARE_FUNCS, '[', value, '.cmp]',
@@ -7424,13 +6185,13 @@ function reglCore (
         case S_STENCIL_OPBACK:
           return parseParam(
             function (value) {
-              check$1.commandType(value, 'object', param, env.commandStr)
+              
               var fail = value.fail || 'keep'
               var zfail = value.zfail || 'keep'
               var zpass = value.zpass || 'keep'
-              check$1.commandParameter(fail, stencilOps, prop + '.fail', env.commandStr)
-              check$1.commandParameter(zfail, stencilOps, prop + '.zfail', env.commandStr)
-              check$1.commandParameter(zpass, stencilOps, prop + '.zpass', env.commandStr)
+              
+              
+              
               return [
                 prop === S_STENCIL_OPBACK ? GL_BACK : GL_FRONT,
                 stencilOps[fail],
@@ -7441,19 +6202,10 @@ function reglCore (
             function (env, scope, value) {
               var STENCIL_OPS = env.constants.stencilOps
 
-              check$1.optional(function () {
-                env.assert(scope,
-                  value + '&&typeof ' + value + '==="object"',
-                  'invalid ' + prop)
-              })
+              
 
               function read (name) {
-                check$1.optional(function () {
-                  env.assert(scope,
-                    '!("' + name + '" in ' + value + ')||' +
-                    '(' + value + '.' + name + ' in ' + STENCIL_OPS + ')',
-                    'invalid ' + prop + '.' + name + ', must be one of ' + Object.keys(stencilOps))
-                })
+                
 
                 return scope.def(
                   '"', name, '" in ', value,
@@ -7472,19 +6224,15 @@ function reglCore (
         case S_POLYGON_OFFSET_OFFSET:
           return parseParam(
             function (value) {
-              check$1.commandType(value, 'object', param, env.commandStr)
+              
               var factor = value.factor | 0
               var units = value.units | 0
-              check$1.commandType(factor, 'number', param + '.factor', env.commandStr)
-              check$1.commandType(units, 'number', param + '.units', env.commandStr)
+              
+              
               return [factor, units]
             },
             function (env, scope, value) {
-              check$1.optional(function () {
-                env.assert(scope,
-                  value + '&&typeof ' + value + '==="object"',
-                  'invalid ' + prop)
-              })
+              
 
               var FACTOR = scope.def(value, '.factor|0')
               var UNITS = scope.def(value, '.units|0')
@@ -7501,38 +6249,22 @@ function reglCore (
               } else if (value === 'back') {
                 face = GL_BACK
               }
-              check$1.command(!!face, param, env.commandStr)
+              
               return face
             },
             function (env, scope, value) {
-              check$1.optional(function () {
-                env.assert(scope,
-                  value + '==="front"||' +
-                  value + '==="back"',
-                  'invalid cull.face')
-              })
+              
               return scope.def(value, '==="front"?', GL_FRONT, ':', GL_BACK)
             })
 
         case S_LINE_WIDTH:
           return parseParam(
             function (value) {
-              check$1.command(
-                typeof value === 'number' &&
-                value >= limits.lineWidthDims[0] &&
-                value <= limits.lineWidthDims[1],
-                'invalid line width, must be a positive number between ' +
-                limits.lineWidthDims[0] + ' and ' + limits.lineWidthDims[1], env.commandStr)
+              
               return value
             },
             function (env, scope, value) {
-              check$1.optional(function () {
-                env.assert(scope,
-                  'typeof ' + value + '==="number"&&' +
-                  value + '>=' + limits.lineWidthDims[0] + '&&' +
-                  value + '<=' + limits.lineWidthDims[1],
-                  'invalid line width')
-              })
+              
 
               return value
             })
@@ -7540,34 +6272,22 @@ function reglCore (
         case S_FRONT_FACE:
           return parseParam(
             function (value) {
-              check$1.commandParameter(value, orientationType, param, env.commandStr)
+              
               return orientationType[value]
             },
             function (env, scope, value) {
-              check$1.optional(function () {
-                env.assert(scope,
-                  value + '==="cw"||' +
-                  value + '==="ccw"',
-                  'invalid frontFace, must be one of cw,ccw')
-              })
+              
               return scope.def(value + '==="cw"?' + GL_CW + ':' + GL_CCW)
             })
 
         case S_COLOR_MASK:
           return parseParam(
             function (value) {
-              check$1.command(
-                isArrayLike(value) && value.length === 4,
-                'color.mask must be length 4 array', env.commandStr)
+              
               return value.map(function (v) { return !!v })
             },
             function (env, scope, value) {
-              check$1.optional(function () {
-                env.assert(scope,
-                  env.shared.isArrayLike + '(' + value + ')&&' +
-                  value + '.length===4',
-                  'invalid color.mask')
-              })
+              
               return loop(4, function (i) {
                 return '!!' + value + '[' + i + ']'
               })
@@ -7576,21 +6296,14 @@ function reglCore (
         case S_SAMPLE_COVERAGE:
           return parseParam(
             function (value) {
-              check$1.command(typeof value === 'object' && value, param, env.commandStr)
+              
               var sampleValue = 'value' in value ? value.value : 1
               var sampleInvert = !!value.invert
-              check$1.command(
-                typeof sampleValue === 'number' &&
-                sampleValue >= 0 && sampleValue <= 1,
-                'sample.coverage.value must be a number between 0 and 1', env.commandStr)
+              
               return [sampleValue, sampleInvert]
             },
             function (env, scope, value) {
-              check$1.optional(function () {
-                env.assert(scope,
-                  value + '&&typeof ' + value + '==="object"',
-                  'invalid sample.coverage')
-              })
+              
               var VALUE = scope.def(
                 '"value" in ', value, '?+', value, '.value:1')
               var INVERT = scope.def('!!', value, '.invert')
@@ -7625,28 +6338,24 @@ function reglCore (
           })
         } else if (reglType === 'framebuffer' ||
                    reglType === 'framebufferCube') {
-          check$1.command(value.color.length > 0,
-            'missing color attachment for framebuffer sent to uniform "' + name + '"', env.commandStr)
+          
           result = createStaticDecl(function (env) {
             return env.link(value.color[0])
           })
         } else {
-          check$1.commandRaise('invalid data for uniform "' + name + '"', env.commandStr)
+          
         }
       } else if (isArrayLike(value)) {
         result = createStaticDecl(function (env) {
           var ITEM = env.global.def('[',
             loop(value.length, function (i) {
-              check$1.command(
-                typeof value[i] === 'number' ||
-                typeof value[i] === 'boolean',
-                'invalid uniform ' + name, env.commandStr)
+              
               return value[i]
             }), ']')
           return ITEM
         })
       } else {
-        check$1.commandRaise('invalid or missing data for uniform "' + name + '"', env.commandStr)
+        
       }
       result.value = value
       UNIFORMS[name] = result
@@ -7685,8 +6394,7 @@ function reglCore (
           record.buffer = buffer
           record.type = 0
         } else {
-          check$1.command(typeof value === 'object' && value,
-            'invalid data for attribute ' + attribute, env.commandStr)
+          
           if ('constant' in value) {
             var constant = value.constant
             record.buffer = 'null'
@@ -7694,11 +6402,7 @@ function reglCore (
             if (typeof constant === 'number') {
               record.x = constant
             } else {
-              check$1.command(
-                isArrayLike(constant) &&
-                constant.length > 0 &&
-                constant.length <= 4,
-                'invalid constant for attribute ' + attribute, env.commandStr)
+              
               CUTE_COMPONENTS.forEach(function (c, i) {
                 if (i < constant.length) {
                   record[c] = constant[i]
@@ -7712,58 +6416,32 @@ function reglCore (
             } else {
               buffer = bufferState.getBuffer(value.buffer)
             }
-            check$1.command(!!buffer, 'missing buffer for attribute "' + attribute + '"', env.commandStr)
+            
 
             var offset = value.offset | 0
-            check$1.command(offset >= 0,
-              'invalid offset for attribute "' + attribute + '"', env.commandStr)
+            
 
             var stride = value.stride | 0
-            check$1.command(stride >= 0 && stride < 256,
-              'invalid stride for attribute "' + attribute + '", must be integer betweeen [0, 255]', env.commandStr)
+            
 
             var size = value.size | 0
-            check$1.command(!('size' in value) || (size > 0 && size <= 4),
-              'invalid size for attribute "' + attribute + '", must be 1,2,3,4', env.commandStr)
+            
 
             var normalized = !!value.normalized
 
             var type = 0
             if ('type' in value) {
-              check$1.commandParameter(
-                value.type, glTypes,
-                'invalid type for attribute ' + attribute, env.commandStr)
+              
               type = glTypes[value.type]
             }
 
             var divisor = value.divisor | 0
             if ('divisor' in value) {
-              check$1.command(divisor === 0 || extInstancing,
-                'cannot specify divisor for attribute "' + attribute + '", instancing not supported', env.commandStr)
-              check$1.command(divisor >= 0,
-                'invalid divisor for attribute "' + attribute + '"', env.commandStr)
+              
+              
             }
 
-            check$1.optional(function () {
-              var command = env.commandStr
-
-              var VALID_KEYS = [
-                'buffer',
-                'offset',
-                'divisor',
-                'normalized',
-                'type',
-                'size',
-                'stride'
-              ]
-
-              Object.keys(value).forEach(function (prop) {
-                check$1.command(
-                  VALID_KEYS.indexOf(prop) >= 0,
-                  'unknown parameter "' + prop + '" for attribute pointer "' + attribute + '" (valid parameters are ' + VALID_KEYS + ')',
-                  command)
-              })
-            })
+            
 
             record.buffer = buffer
             record.state = ATTRIB_STATE_POINTER
@@ -7810,19 +6488,7 @@ function reglCore (
         var BUFFER_STATE = shared.buffer
 
         // Perform validation on attribute
-        check$1.optional(function () {
-          env.assert(block,
-            VALUE + '&&(typeof ' + VALUE + '==="object"||typeof ' +
-            VALUE + '==="function")&&(' +
-            IS_BUFFER_ARGS + '(' + VALUE + ')||' +
-            BUFFER_STATE + '.getBuffer(' + VALUE + ')||' +
-            BUFFER_STATE + '.getBuffer(' + VALUE + '.buffer)||' +
-            IS_BUFFER_ARGS + '(' + VALUE + '.buffer)||' +
-            '("constant" in ' + VALUE +
-            '&&(typeof ' + VALUE + '.constant==="number"||' +
-            shared.isArrayLike + '(' + VALUE + '.constant))))',
-            'invalid dynamic attribute "' + attribute + '"')
-        })
+        
 
         // allocate names for result
         var result = {
@@ -7943,32 +6609,7 @@ function reglCore (
     var staticOptions = options.static
     var dynamicOptions = options.dynamic
 
-    check$1.optional(function () {
-      var KEY_NAMES = [
-        S_FRAMEBUFFER,
-        S_VERT,
-        S_FRAG,
-        S_ELEMENTS,
-        S_PRIMITIVE,
-        S_OFFSET,
-        S_COUNT,
-        S_INSTANCES,
-        S_PROFILE,
-        S_VAO
-      ].concat(GL_STATE_NAMES)
-
-      function checkKeys (dict) {
-        Object.keys(dict).forEach(function (key) {
-          check$1.command(
-            KEY_NAMES.indexOf(key) >= 0,
-            'unknown parameter "' + key + '"',
-            env.commandStr)
-        })
-      }
-
-      checkKeys(staticOptions)
-      checkKeys(dynamicOptions)
-    })
+    
 
     var attribLocations = parseAttribLocations(options, attributes)
 
@@ -8413,11 +7054,7 @@ function reglCore (
           return
         }
         var scopeAttrib = env.scopeAttrib(name)
-        check$1.optional(function () {
-          env.assert(scope,
-            scopeAttrib + '.state',
-            'missing attribute ' + name)
-        })
+        
         record = {}
         Object.keys(new AttributeRecord()).forEach(function (key) {
           record[key] = scope.def(scopeAttrib, '.', key)
@@ -8448,19 +7085,9 @@ function reglCore (
         }
         if (isStatic(arg)) {
           var value = arg.value
-          check$1.command(
-            value !== null && typeof value !== 'undefined',
-            'missing uniform "' + name + '"', env.commandStr)
+          
           if (type === GL_SAMPLER_2D || type === GL_SAMPLER_CUBE) {
-            check$1.command(
-              typeof value === 'function' &&
-              ((type === GL_SAMPLER_2D &&
-                (value._reglType === 'texture2d' ||
-                value._reglType === 'framebuffer')) ||
-              (type === GL_SAMPLER_CUBE &&
-                (value._reglType === 'textureCube' ||
-                value._reglType === 'framebufferCube'))),
-              'invalid texture for uniform ' + name, env.commandStr)
+            
             var TEX_VALUE = env.link(value._texture || value.color[0]._texture)
             scope(GL, '.uniform1i(', LOCATION, ',', TEX_VALUE + '.bind());')
             scope.exit(TEX_VALUE, '.unbind();')
@@ -8468,15 +7095,7 @@ function reglCore (
             type === GL_FLOAT_MAT2 ||
             type === GL_FLOAT_MAT3 ||
             type === GL_FLOAT_MAT4) {
-            check$1.optional(function () {
-              check$1.command(isArrayLike(value),
-                'invalid matrix for uniform ' + name, env.commandStr)
-              check$1.command(
-                (type === GL_FLOAT_MAT2 && value.length === 4) ||
-                (type === GL_FLOAT_MAT3 && value.length === 9) ||
-                (type === GL_FLOAT_MAT4 && value.length === 16),
-                'invalid length for matrix uniform ' + name, env.commandStr)
-            })
+            
             var MAT_VALUE = env.global.def('new Float32Array([' +
               Array.prototype.slice.call(value) + '])')
             var dim = 2
@@ -8490,70 +7109,52 @@ function reglCore (
               LOCATION, ',false,', MAT_VALUE, ');')
           } else {
             switch (type) {
-              case GL_FLOAT$8:
-                check$1.commandType(value, 'number', 'uniform ' + name, env.commandStr)
+              case GL_FLOAT$7:
+                
                 infix = '1f'
                 break
               case GL_FLOAT_VEC2:
-                check$1.command(
-                  isArrayLike(value) && value.length === 2,
-                  'uniform ' + name, env.commandStr)
+                
                 infix = '2f'
                 break
               case GL_FLOAT_VEC3:
-                check$1.command(
-                  isArrayLike(value) && value.length === 3,
-                  'uniform ' + name, env.commandStr)
+                
                 infix = '3f'
                 break
               case GL_FLOAT_VEC4:
-                check$1.command(
-                  isArrayLike(value) && value.length === 4,
-                  'uniform ' + name, env.commandStr)
+                
                 infix = '4f'
                 break
               case GL_BOOL:
-                check$1.commandType(value, 'boolean', 'uniform ' + name, env.commandStr)
+                
                 infix = '1i'
                 break
-              case GL_INT$3:
-                check$1.commandType(value, 'number', 'uniform ' + name, env.commandStr)
+              case GL_INT$2:
+                
                 infix = '1i'
                 break
               case GL_BOOL_VEC2:
-                check$1.command(
-                  isArrayLike(value) && value.length === 2,
-                  'uniform ' + name, env.commandStr)
+                
                 infix = '2i'
                 break
               case GL_INT_VEC2:
-                check$1.command(
-                  isArrayLike(value) && value.length === 2,
-                  'uniform ' + name, env.commandStr)
+                
                 infix = '2i'
                 break
               case GL_BOOL_VEC3:
-                check$1.command(
-                  isArrayLike(value) && value.length === 3,
-                  'uniform ' + name, env.commandStr)
+                
                 infix = '3i'
                 break
               case GL_INT_VEC3:
-                check$1.command(
-                  isArrayLike(value) && value.length === 3,
-                  'uniform ' + name, env.commandStr)
+                
                 infix = '3i'
                 break
               case GL_BOOL_VEC4:
-                check$1.command(
-                  isArrayLike(value) && value.length === 4,
-                  'uniform ' + name, env.commandStr)
+                
                 infix = '4i'
                 break
               case GL_INT_VEC4:
-                check$1.command(
-                  isArrayLike(value) && value.length === 4,
-                  'uniform ' + name, env.commandStr)
+                
                 infix = '4i'
                 break
             }
@@ -8585,86 +7186,7 @@ function reglCore (
       }
 
       // perform type validation
-      check$1.optional(function () {
-        function check (pred, message) {
-          env.assert(scope, pred,
-            'bad data or missing for uniform "' + name + '".  ' + message)
-        }
-
-        function checkType (type) {
-          check(
-            'typeof ' + VALUE + '==="' + type + '"',
-            'invalid type, expected ' + type)
-        }
-
-        function checkVector (n, type) {
-          check(
-            shared.isArrayLike + '(' + VALUE + ')&&' + VALUE + '.length===' + n,
-            'invalid vector, should have length ' + n, env.commandStr)
-        }
-
-        function checkTexture (target) {
-          check(
-            'typeof ' + VALUE + '==="function"&&' +
-            VALUE + '._reglType==="texture' +
-            (target === GL_TEXTURE_2D$3 ? '2d' : 'Cube') + '"',
-            'invalid texture type', env.commandStr)
-        }
-
-        switch (type) {
-          case GL_INT$3:
-            checkType('number')
-            break
-          case GL_INT_VEC2:
-            checkVector(2, 'number')
-            break
-          case GL_INT_VEC3:
-            checkVector(3, 'number')
-            break
-          case GL_INT_VEC4:
-            checkVector(4, 'number')
-            break
-          case GL_FLOAT$8:
-            checkType('number')
-            break
-          case GL_FLOAT_VEC2:
-            checkVector(2, 'number')
-            break
-          case GL_FLOAT_VEC3:
-            checkVector(3, 'number')
-            break
-          case GL_FLOAT_VEC4:
-            checkVector(4, 'number')
-            break
-          case GL_BOOL:
-            checkType('boolean')
-            break
-          case GL_BOOL_VEC2:
-            checkVector(2, 'boolean')
-            break
-          case GL_BOOL_VEC3:
-            checkVector(3, 'boolean')
-            break
-          case GL_BOOL_VEC4:
-            checkVector(4, 'boolean')
-            break
-          case GL_FLOAT_MAT2:
-            checkVector(4, 'number')
-            break
-          case GL_FLOAT_MAT3:
-            checkVector(9, 'number')
-            break
-          case GL_FLOAT_MAT4:
-            checkVector(16, 'number')
-            break
-          case GL_SAMPLER_2D:
-            checkTexture(GL_TEXTURE_2D$3)
-            break
-          case GL_SAMPLER_CUBE:
-            checkTexture(GL_TEXTURE_CUBE_MAP$2)
-            break
-        }
-      })
+      
 
       var unroll = 1
       switch (type) {
@@ -8675,7 +7197,7 @@ function reglCore (
           scope.exit(TEX, '.unbind();')
           continue
 
-        case GL_INT$3:
+        case GL_INT$2:
         case GL_BOOL:
           infix = '1i'
           break
@@ -8698,7 +7220,7 @@ function reglCore (
           unroll = 4
           break
 
-        case GL_FLOAT$8:
+        case GL_FLOAT$7:
           infix = '1f'
           break
 
@@ -8786,19 +7308,10 @@ function reglCore (
           scope = inner
         }
         COUNT = defn.append(env, scope)
-        check$1.optional(function () {
-          if (defn.MISSING) {
-            env.assert(outer, 'false', 'missing vertex count')
-          }
-          if (defn.DYNAMIC) {
-            env.assert(scope, COUNT + '>=0', 'missing vertex count')
-          }
-        })
+        
       } else {
         COUNT = scope.def(DRAW_STATE, '.', S_COUNT)
-        check$1.optional(function () {
-          env.assert(scope, COUNT + '>=0', 'missing vertex count')
-        })
+        
       }
       return COUNT
     }
@@ -8846,7 +7359,7 @@ function reglCore (
           PRIMITIVE,
           COUNT,
           ELEMENT_TYPE,
-          OFFSET + '<<((' + ELEMENT_TYPE + '-' + GL_UNSIGNED_BYTE$8 + ')>>1)',
+          OFFSET + '<<((' + ELEMENT_TYPE + '-' + GL_UNSIGNED_BYTE$7 + ')>>1)',
           INSTANCES
         ], ');')
       }
@@ -8877,7 +7390,7 @@ function reglCore (
           PRIMITIVE,
           COUNT,
           ELEMENT_TYPE,
-          OFFSET + '<<((' + ELEMENT_TYPE + '-' + GL_UNSIGNED_BYTE$8 + ')>>1)'
+          OFFSET + '<<((' + ELEMENT_TYPE + '-' + GL_UNSIGNED_BYTE$7 + ')>>1)'
         ] + ');')
       }
 
@@ -8918,10 +7431,7 @@ function reglCore (
   function createBody (emitBody, parentEnv, args, program, count) {
     var env = createREGLEnvironment()
     var scope = env.proc('body', count)
-    check$1.optional(function () {
-      env.commandStr = parentEnv.commandStr
-      env.command = env.link(parentEnv.commandStr)
-    })
+    
     if (extInstancing) {
       env.instancing = scope.def(
         env.shared.extensions, '.angle_instanced_arrays')
@@ -9372,11 +7882,7 @@ function reglCore (
     emitScopeProc(env, args)
     emitBatchProc(env, args)
 
-    return extend(env.compile(), {
-      destroy: function () {
-        args.shader.program.destroy()
-      }
-    })
+    return env.compile()
   }
 
   // ===========================================================================
@@ -9700,11 +8206,6 @@ function wrapREGL (args) {
   var stringStore = createStringStore()
   var stats$$1 = stats()
   var extensions = extensionState.extensions
-
-  // if (gl.getParameter(gl.VERSION).indexOf('WebGL 2.0') >= 0) {
-  //   gl2.gl2(gl, extensions)
-  // }
-
   var timer = createTimer(gl, extensions)
 
   var START_TIME = clock()
@@ -9919,8 +8420,8 @@ function wrapREGL (args) {
   }
 
   function compileProcedure (options) {
-    check$1(!!options, 'invalid args to regl({...})')
-    check$1.type(options, 'object', 'invalid args to regl({...})')
+    
+    
 
     function flattenNestedOptions (options) {
       var result = extend({}, options)
@@ -10006,7 +8507,7 @@ function wrapREGL (args) {
     function REGLCommand (args, body) {
       var i
       if (contextLost) {
-        check$1.raise('context lost')
+        
       }
       if (typeof args === 'function') {
         return scope.call(this, null, args, 0)
@@ -10036,10 +8537,7 @@ function wrapREGL (args) {
     }
 
     return extend(REGLCommand, {
-      stats: stats$$1,
-      destroy: function () {
-        compiled.destroy()
-      }
+      stats: stats$$1
     })
   }
 
@@ -10065,14 +8563,12 @@ function wrapREGL (args) {
       clearFlags |= GL_STENCIL_BUFFER_BIT
     }
 
-    check$1(!!clearFlags, 'called regl.clear with no buffer specified')
+    
     gl.clear(clearFlags)
   }
 
   function clear (options) {
-    check$1(
-      typeof options === 'object' && options,
-      'regl.clear() takes an object as input')
+    
     if ('framebuffer' in options) {
       if (options.framebuffer &&
           options.framebuffer_reglType === 'framebufferCube') {
@@ -10090,7 +8586,7 @@ function wrapREGL (args) {
   }
 
   function frame (cb) {
-    check$1.type(cb, 'function', 'regl.frame() callback must be a function')
+    
     rafCallbacks.push(cb)
 
     function cancel () {
@@ -10098,7 +8594,7 @@ function wrapREGL (args) {
       // what if a user calls frame twice with the same callback...
       //
       var i = find(rafCallbacks, cb)
-      check$1(i >= 0, 'cannot cancel a frame twice')
+      
       function pendingCancel () {
         var index = find(rafCallbacks, pendingCancel)
         rafCallbacks[index] = rafCallbacks[rafCallbacks.length - 1]
@@ -10156,7 +8652,7 @@ function wrapREGL (args) {
   refresh()
 
   function addListener (event, callback) {
-    check$1.type(callback, 'function', 'listener callback must be a function')
+    
 
     var callbacks
     switch (event) {
@@ -10172,7 +8668,7 @@ function wrapREGL (args) {
         callbacks = destroyCallbacks
         break
       default:
-        check$1.raise('invalid event, must be one of frame,lost,restore,destroy')
+        
     }
 
     callbacks.push(callback)
@@ -10260,4 +8756,3 @@ function wrapREGL (args) {
 return wrapREGL;
 
 })));
-//# sourceMappingURL=regl.js.map
