@@ -93,6 +93,7 @@
     "vertices-bounding-box": "^1.0.0"
   },
   "scripts": {
+    "lint": "standard",
     "test": "standard | snazzy && tape test/index.js | tap-min",
     "test-browser": "budo test/browser.js --open",
     "test-typescript": "tsc",
