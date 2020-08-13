@@ -5390,8 +5390,14 @@ function wrapAttributeState (
           var buf
           if (vao.buffers[i]) {
             buf = vao.buffers[i]
-            buf.subdata(data)
-          } else {
+            if (isTypedArray(data) && buf._buffer.byteLength >= data.byteLength) {
+              buf.subdata(data)
+            } else {
+              buf.destroy()
+              vao.buffers[i] = null
+            }
+          }
+          if (!vao.buffers[i]) {
             buf = vao.buffers[i] = bufferState.create(spec, GL_ARRAY_BUFFER$1, false, true)
           }
           rec.buffer = bufferState.getBuffer(buf)
