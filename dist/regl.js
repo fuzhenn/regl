@@ -4044,9 +4044,9 @@ var wrapRenderbuffers = function (gl, extensions, limits, stats, config) {
       gl.bindRenderbuffer(GL_RENDERBUFFER, renderbuffer.renderbuffer)
       gl.renderbufferStorage(GL_RENDERBUFFER, format, w, h)
 
-      check$1(
-        gl.getError() === 0,
-        'invalid render buffer format')
+      // check(
+      //   gl.getError() === 0,
+      //   'invalid render buffer format')
 
       if (config.profile) {
         renderbuffer.stats.size = getRenderbufferSize(renderbuffer.format, renderbuffer.width, renderbuffer.height)
@@ -5235,6 +5235,7 @@ function wrapAttributeState (
       ext.bindVertexArrayOES(this.vao)
       this.bindAttrs()
       state.currentVAO = this
+      ext.bindVertexArrayOES(null)
     }
   }
 
