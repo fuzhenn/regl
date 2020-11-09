@@ -1,6 +1,6 @@
 {
   "name": "@maptalks/regl",
-  "version": "0.3.2",
+  "version": "3.0.2",
   "description": "regl is a fast functional WebGL framework.",
   "main": "dist/regl.js",
   "types": "dist/regl.d.ts",
