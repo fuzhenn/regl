@@ -4076,9 +4076,9 @@ var wrapRenderbuffers = function (gl, extensions, limits, stats, config) {
       gl.bindRenderbuffer(GL_RENDERBUFFER, renderbuffer.renderbuffer)
       gl.renderbufferStorage(GL_RENDERBUFFER, renderbuffer.format, w, h)
 
-      check$1(
-        gl.getError() === 0,
-        'invalid render buffer format')
+      // check(
+      //   gl.getError() === 0,
+      //   'invalid render buffer format')
 
       // also, recompute size.
       if (config.profile) {
