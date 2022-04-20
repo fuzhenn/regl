@@ -8476,10 +8476,12 @@ function reglCore (
         'stride'
       ]
 
+      // 因为regl自己全局状态可能和fusiongl产生冲突
+      // 所以去掉了以下逻辑中，与states的比较，每次都调用enableVertexAttribArray，bindBuffer和vertexAttribPointer
       function emitBuffer () {
         scope(
-          'if(!', BINDING, '.buffer){',
-          GL, '.enableVertexAttribArray(', LOCATION, ');}')
+          // 'if(!', BINDING, '.buffer){',
+          GL, '.enableVertexAttribArray(', LOCATION, ');')
 
         var TYPE = record.type
         var SIZE
@@ -8489,13 +8491,13 @@ function reglCore (
           SIZE = scope.def(record.size, '||', size)
         }
 
-        scope('if(',
+        scope(/*'if(',
           BINDING, '.type!==', TYPE, '||',
           BINDING, '.size!==', SIZE, '||',
           COMMON_KEYS.map(function (key) {
             return BINDING + '.' + key + '!==' + record[key]
           }).join('||'),
-          '){',
+          '){',*/
           GL, '.bindBuffer(', GL_ARRAY_BUFFER$2, ',', BUFFER, '.buffer);',
           GL, '.vertexAttribPointer(', [
             LOCATION,
@@ -8509,8 +8511,8 @@ function reglCore (
           BINDING, '.size=', SIZE, ';',
           COMMON_KEYS.map(function (key) {
             return BINDING + '.' + key + '=' + record[key] + ';'
-          }).join(''),
-          '}')
+          }).join('')/*,
+          '}'*/)
 
         if (extInstancing) {
           var DIVISOR = record.divisor
