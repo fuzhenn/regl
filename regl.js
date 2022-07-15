@@ -613,7 +613,9 @@ module.exports = function wrapREGL (args) {
     now: now,
 
     // regl Statistics Information
-    stats: stats
+    stats: stats,
+
+    blit: framebufferState.blit
   })
 
   config.onDone(null, regl)
