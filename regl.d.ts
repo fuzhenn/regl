@@ -1227,6 +1227,8 @@ declare namespace REGL {
     resize(radius: number): REGL.Texture2D;
     /** Resizes the texture to dimensions `width` x `height`. */
     resize(width: number, height: number): REGL.Texture2D;
+    /** calls texParameteri directly on WebGLTexture objet **/
+    texParameteri(target: number, pname: number): number;
   }
 
   interface Texture2DOptions {
@@ -1543,7 +1545,7 @@ declare namespace REGL {
 
     /* Resizes the FramebufferCube and all its attachments. */
     resize(radius: number): REGL.FramebufferCube;
-         
+
     /* Faces of the FramebufferCube */
     faces: [
       REGL.Framebuffer,
